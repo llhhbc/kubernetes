@@ -111,7 +111,7 @@ type genericScheduler struct {
 // If it fails, it will return a FitError error with reasons.
 func (g *genericScheduler) Schedule(pod *v1.Pod, nodeLister algorithm.NodeLister) (string, error) {
 	trace := utiltrace.New(fmt.Sprintf("Scheduling %s/%s", pod.Namespace, pod.Name))
-	defer trace.LogIfLong(100 * time.Millisecond)
+	defer trace.LogIfLong(0)
 
 	if err := podPassesBasicChecks(pod, g.pvcLister); err != nil {
 		return "", err

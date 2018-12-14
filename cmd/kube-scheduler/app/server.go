@@ -345,6 +345,7 @@ through the API as necessary.`,
 	}
 
 	opts.config, err = opts.ApplyDefaults(opts.config)
+	fmt.Printf("get default: %#v \n", opts.config)
 	if err != nil {
 		glog.Fatalf("unable to apply config defaults: %v", err)
 	}
