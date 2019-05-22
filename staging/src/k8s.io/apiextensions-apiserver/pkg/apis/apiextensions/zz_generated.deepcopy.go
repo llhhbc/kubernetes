@@ -48,6 +48,11 @@ func (in *CustomResourceConversion) DeepCopyInto(out *CustomResourceConversion) 
 		*out = new(WebhookClientConfig)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.ConversionReviewVersions != nil {
+		in, out := &in.ConversionReviewVersions, &out.ConversionReviewVersions
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 
@@ -195,6 +200,11 @@ func (in *CustomResourceDefinitionSpec) DeepCopyInto(out *CustomResourceDefiniti
 		in, out := &in.Conversion, &out.Conversion
 		*out = new(CustomResourceConversion)
 		(*in).DeepCopyInto(*out)
+	}
+	if in.PreserveUnknownFields != nil {
+		in, out := &in.PreserveUnknownFields, &out.PreserveUnknownFields
+		*out = new(bool)
+		**out = **in
 	}
 	return
 }

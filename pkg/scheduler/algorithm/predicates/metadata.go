@@ -34,6 +34,16 @@ import (
 	schedutil "k8s.io/kubernetes/pkg/scheduler/util"
 )
 
+// PredicateMetadata interface represents anything that can access a predicate metadata.
+type PredicateMetadata interface {
+	ShallowCopy() PredicateMetadata
+	AddPod(addedPod *v1.Pod, nodeInfo *schedulernodeinfo.NodeInfo) error
+	RemovePod(deletedPod *v1.Pod) error
+}
+
+// PredicateMetadataProducer is a function that computes predicate metadata for a given pod.
+type PredicateMetadataProducer func(pod *v1.Pod, nodeNameToInfo map[string]*schedulernodeinfo.NodeInfo) PredicateMetadata
+
 // PredicateMetadataFactory defines a factory of predicate metadata.
 type PredicateMetadataFactory struct {
 	podLister algorithm.PodLister
@@ -43,13 +53,6 @@ type PredicateMetadataFactory struct {
 type topologyPair struct {
 	key   string
 	value string
-}
-
-//  Note that predicateMetadata and matchingPodAntiAffinityTerm need to be declared in the same file
-//  due to the way declarations are processed in predicate declaration unit tests.
-type matchingPodAntiAffinityTerm struct {
-	term *v1.PodAffinityTerm
-	node *v1.Node
 }
 
 type podSet map[*v1.Pod]struct{}
@@ -91,19 +94,22 @@ type predicateMetadata struct {
 }
 
 // Ensure that predicateMetadata implements algorithm.PredicateMetadata.
-var _ algorithm.PredicateMetadata = &predicateMetadata{}
+var _ PredicateMetadata = &predicateMetadata{}
 
-// PredicateMetadataProducer function produces predicate metadata.
-type PredicateMetadataProducer func(pm *predicateMetadata)
+// predicateMetadataProducer function produces predicate metadata. It is stored in a global variable below
+// and used to modify the return values of PredicateMetadataProducer
+type predicateMetadataProducer func(pm *predicateMetadata)
 
-var predicateMetaProducerRegisterLock sync.Mutex
-var predicateMetadataProducers = make(map[string]PredicateMetadataProducer)
+var predicateMetadataProducers = make(map[string]predicateMetadataProducer)
 
 // RegisterPredicateMetadataProducer registers a PredicateMetadataProducer.
-func RegisterPredicateMetadataProducer(predicateName string, precomp PredicateMetadataProducer) {
-	predicateMetaProducerRegisterLock.Lock()
-	defer predicateMetaProducerRegisterLock.Unlock()
+func RegisterPredicateMetadataProducer(predicateName string, precomp predicateMetadataProducer) {
 	predicateMetadataProducers[predicateName] = precomp
+}
+
+// EmptyPredicateMetadataProducer returns a no-op MetadataProducer type.
+func EmptyPredicateMetadataProducer(pod *v1.Pod, nodeNameToInfo map[string]*schedulernodeinfo.NodeInfo) PredicateMetadata {
+	return nil
 }
 
 // RegisterPredicateMetadataProducerWithExtendedResourceOptions registers a
@@ -118,7 +124,7 @@ func RegisterPredicateMetadataProducerWithExtendedResourceOptions(ignoredExtende
 }
 
 // NewPredicateMetadataFactory creates a PredicateMetadataFactory.
-func NewPredicateMetadataFactory(podLister algorithm.PodLister) algorithm.PredicateMetadataProducer {
+func NewPredicateMetadataFactory(podLister algorithm.PodLister) PredicateMetadataProducer {
 	factory := &PredicateMetadataFactory{
 		podLister,
 	}
@@ -126,7 +132,7 @@ func NewPredicateMetadataFactory(podLister algorithm.PodLister) algorithm.Predic
 }
 
 // GetMetadata returns the predicateMetadata used which will be used by various predicates.
-func (pfactory *PredicateMetadataFactory) GetMetadata(pod *v1.Pod, nodeNameToInfoMap map[string]*schedulernodeinfo.NodeInfo) algorithm.PredicateMetadata {
+func (pfactory *PredicateMetadataFactory) GetMetadata(pod *v1.Pod, nodeNameToInfoMap map[string]*schedulernodeinfo.NodeInfo) PredicateMetadata {
 	// If we cannot compute metadata, just return nil
 	if pod == nil {
 		return nil
@@ -285,7 +291,7 @@ func (meta *predicateMetadata) AddPod(addedPod *v1.Pod, nodeInfo *schedulernodei
 
 // ShallowCopy copies a metadata struct into a new struct and creates a copy of
 // its maps and slices, but it does not copy the contents of pointer values.
-func (meta *predicateMetadata) ShallowCopy() algorithm.PredicateMetadata {
+func (meta *predicateMetadata) ShallowCopy() PredicateMetadata {
 	newPredMeta := &predicateMetadata{
 		pod:                      meta.pod,
 		podBestEffort:            meta.podBestEffort,
@@ -304,7 +310,7 @@ func (meta *predicateMetadata) ShallowCopy() algorithm.PredicateMetadata {
 		meta.serviceAffinityMatchingPodServices...)
 	newPredMeta.serviceAffinityMatchingPodList = append([]*v1.Pod(nil),
 		meta.serviceAffinityMatchingPodList...)
-	return (algorithm.PredicateMetadata)(newPredMeta)
+	return (PredicateMetadata)(newPredMeta)
 }
 
 type affinityTermProperties struct {
@@ -383,6 +389,8 @@ func getTPMapMatchingExistingAntiAffinity(pod *v1.Pod, nodeInfoMap map[string]*s
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	processNode := func(i int) {
 		nodeInfo := nodeInfoMap[allNodeNames[i]]
 		node := nodeInfo.Node()
@@ -394,12 +402,13 @@ func getTPMapMatchingExistingAntiAffinity(pod *v1.Pod, nodeInfoMap map[string]*s
 			existingPodTopologyMaps, err := getMatchingAntiAffinityTopologyPairsOfPod(pod, existingPod, node)
 			if err != nil {
 				catchError(err)
+				cancel()
 				return
 			}
 			appendTopologyPairsMaps(existingPodTopologyMaps)
 		}
 	}
-	workqueue.ParallelizeUntil(context.TODO(), 16, len(allNodeNames), processNode)
+	workqueue.ParallelizeUntil(ctx, 16, len(allNodeNames), processNode)
 	return topologyMaps, firstError
 }
 
@@ -448,6 +457,8 @@ func getTPMapMatchingIncomingAffinityAntiAffinity(pod *v1.Pod, nodeInfoMap map[s
 	}
 	antiAffinityTerms := GetPodAntiAffinityTerms(affinity.PodAntiAffinity)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	processNode := func(i int) {
 		nodeInfo := nodeInfoMap[allNodeNames[i]]
 		node := nodeInfo.Node()
@@ -473,6 +484,7 @@ func getTPMapMatchingIncomingAffinityAntiAffinity(pod *v1.Pod, nodeInfoMap map[s
 				selector, err := metav1.LabelSelectorAsSelector(term.LabelSelector)
 				if err != nil {
 					catchError(err)
+					cancel()
 					return
 				}
 				if priorityutil.PodMatchesTermsNamespaceAndSelector(existingPod, namespaces, selector) {
@@ -487,7 +499,7 @@ func getTPMapMatchingIncomingAffinityAntiAffinity(pod *v1.Pod, nodeInfoMap map[s
 			appendResult(node.Name, nodeTopologyPairsAffinityPodsMaps, nodeTopologyPairsAntiAffinityPodsMaps)
 		}
 	}
-	workqueue.ParallelizeUntil(context.TODO(), 16, len(allNodeNames), processNode)
+	workqueue.ParallelizeUntil(ctx, 16, len(allNodeNames), processNode)
 	return topologyPairsAffinityPodsMaps, topologyPairsAntiAffinityPodsMaps, firstError
 }
 

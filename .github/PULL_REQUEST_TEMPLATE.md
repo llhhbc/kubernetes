@@ -2,7 +2,7 @@
 
 1. If this is your first time, please read our contributor guidelines: https://git.k8s.io/community/contributors/guide#your-first-contribution and developer guide https://git.k8s.io/community/contributors/devel/development.md#development-guide
 2. Please label this pull request according to what type of issue you are addressing, especially if this is a release targeted pull request. For reference on required PR/issue labels, read here:
-https://git.k8s.io/community/contributors/devel/release.md#issue-kind-label
+https://git.k8s.io/community/contributors/devel/sig-release/release.md#issuepr-kind-label
 3. Ensure you have added or ran the appropriate tests for your PR: https://git.k8s.io/community/contributors/devel/testing.md
 4. If you want *faster* PR reviews, read how: https://git.k8s.io/community/contributors/guide/pull-requests.md#best-practices-for-faster-reviews
 5. Follow the instructions for writing a release note: https://git.k8s.io/community/contributors/guide/release-notes.md
@@ -10,7 +10,7 @@ https://git.k8s.io/community/contributors/devel/release.md#issue-kind-label
 -->
 
 **What type of PR is this?**
-> Uncomment only one, leave it on its own line:
+> Uncomment only one ` /kind <>` line, hit enter to put that in a new line, and remove leading whitespaces from that line:
 >
 > /kind api-change
 > /kind bug
@@ -24,7 +24,7 @@ https://git.k8s.io/community/contributors/devel/release.md#issue-kind-label
 **What this PR does / why we need it**:
 
 **Which issue(s) this PR fixes**:
-<!-- 
+<!--
 *Automatically closes linked issue when PR is merged.
 Usage: `Fixes #<issue number>`, or `Fixes (paste link of issue)`.
 _If PR is about `failing-tests or flakes`, please post the related issues/tests in a comment and do not use `Fixes`_*
@@ -34,8 +34,8 @@ Fixes #
 **Special notes for your reviewer**:
 
 **Does this PR introduce a user-facing change?**:
-<!--  
-If no, just write "NONE".
+<!--
+If no, just write "NONE" in the release-note block below.
 If yes, a release note is required:
 Enter your extended release note in the block below. If the PR requires additional action from users switching to the new release, include the string "action required".
 -->

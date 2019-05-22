@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/evanphx/json-patch"
+	jsonpatch "github.com/evanphx/json-patch"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -131,15 +131,14 @@ func ObjectReaction(tracker ObjectTracker) ReactionFunc {
 		case PatchActionImpl:
 			obj, err := tracker.Get(gvr, ns, action.GetName())
 			if err != nil {
-				// object is not registered
-				return false, nil, err
+				return true, nil, err
 			}
 
 			old, err := json.Marshal(obj)
 			if err != nil {
 				return true, nil, err
 			}
-			// Only supports strategic merge patch and JSONPatch as coded.
+
 			switch action.GetPatchType() {
 			case types.JSONPatchType:
 				patch, err := jsonpatch.DecodePatch(action.GetPatch())
@@ -151,6 +150,15 @@ func ObjectReaction(tracker ObjectTracker) ReactionFunc {
 					return true, nil, err
 				}
 				if err = json.Unmarshal(modified, obj); err != nil {
+					return true, nil, err
+				}
+			case types.MergePatchType:
+				modified, err := jsonpatch.MergePatch(old, action.GetPatch())
+				if err != nil {
+					return true, nil, err
+				}
+
+				if err := json.Unmarshal(modified, obj); err != nil {
 					return true, nil, err
 				}
 			case types.StrategicMergePatchType:

@@ -17,17 +17,14 @@ limitations under the License.
 package cmd
 
 import (
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/renstrom/dedent"
+	"github.com/lithammer/dedent"
 
-	clientsetfake "k8s.io/client-go/kubernetes/fake"
-	kubeadmapiv1beta1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta1"
-	"k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/validation"
+	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/preflight"
 	testutil "k8s.io/kubernetes/cmd/kubeadm/test"
@@ -83,21 +80,6 @@ func assertDirEmpty(t *testing.T, path string) {
 	if len(errors) != 0 {
 		t.Errorf("directory not empty: [%v]", errors)
 	}
-}
-
-func TestNewReset(t *testing.T) {
-	var in io.Reader
-	certsDir := kubeadmapiv1beta1.DefaultCertificatesDir
-	criSocketPath := kubeadmapiv1beta1.DefaultCRISocket
-	forceReset := true
-
-	ignorePreflightErrors := []string{"all"}
-	ignorePreflightErrorsSet, _ := validation.ValidateIgnorePreflightErrors(ignorePreflightErrors)
-	NewReset(in, ignorePreflightErrorsSet, forceReset, certsDir, criSocketPath)
-
-	ignorePreflightErrors = []string{}
-	ignorePreflightErrorsSet, _ = validation.ValidateIgnorePreflightErrors(ignorePreflightErrors)
-	NewReset(in, ignorePreflightErrorsSet, forceReset, certsDir, criSocketPath)
 }
 
 func TestConfigDirCleaner(t *testing.T) {
@@ -195,51 +177,53 @@ func TestConfigDirCleaner(t *testing.T) {
 	}
 
 	for name, test := range tests {
-		t.Logf("Running test: %s", name)
+		t.Run(name, func(t *testing.T) {
+			t.Logf("Running test: %s", name)
 
-		// Create a temporary directory for our fake config dir:
-		tmpDir, err := ioutil.TempDir("", "kubeadm-reset-test")
-		if err != nil {
-			t.Errorf("Unable to create temporary directory: %s", err)
-		}
-
-		for _, createDir := range test.setupDirs {
-			err := os.Mkdir(filepath.Join(tmpDir, createDir), 0700)
+			// Create a temporary directory for our fake config dir:
+			tmpDir, err := ioutil.TempDir("", "kubeadm-reset-test")
 			if err != nil {
-				t.Errorf("Unable to setup test config directory: %s", err)
+				t.Errorf("Unable to create temporary directory: %s", err)
 			}
-		}
 
-		for _, createFile := range test.setupFiles {
-			fullPath := filepath.Join(tmpDir, createFile)
-			f, err := os.Create(fullPath)
-			if err != nil {
-				t.Errorf("Unable to create test file: %s", err)
+			for _, createDir := range test.setupDirs {
+				err := os.Mkdir(filepath.Join(tmpDir, createDir), 0700)
+				if err != nil {
+					t.Errorf("Unable to setup test config directory: %s", err)
+				}
 			}
-			f.Close()
-		}
 
-		if test.resetDir == "" {
-			test.resetDir = "pki"
-		}
-		resetConfigDir(tmpDir, filepath.Join(tmpDir, test.resetDir))
+			for _, createFile := range test.setupFiles {
+				fullPath := filepath.Join(tmpDir, createFile)
+				f, err := os.Create(fullPath)
+				if err != nil {
+					t.Errorf("Unable to create test file: %s", err)
+				}
+				f.Close()
+			}
 
-		// Verify the files we cleanup implicitly in every test:
-		assertExists(t, tmpDir)
-		assertNotExists(t, filepath.Join(tmpDir, kubeadmconstants.AdminKubeConfigFileName))
-		assertNotExists(t, filepath.Join(tmpDir, kubeadmconstants.KubeletKubeConfigFileName))
-		assertDirEmpty(t, filepath.Join(tmpDir, "manifests"))
-		assertDirEmpty(t, filepath.Join(tmpDir, "pki"))
+			if test.resetDir == "" {
+				test.resetDir = "pki"
+			}
+			resetConfigDir(tmpDir, filepath.Join(tmpDir, test.resetDir))
 
-		// Verify the files as requested by the test:
-		for _, path := range test.verifyExists {
-			assertExists(t, filepath.Join(tmpDir, path))
-		}
-		for _, path := range test.verifyNotExists {
-			assertNotExists(t, filepath.Join(tmpDir, path))
-		}
+			// Verify the files we cleanup implicitly in every test:
+			assertExists(t, tmpDir)
+			assertNotExists(t, filepath.Join(tmpDir, kubeadmconstants.AdminKubeConfigFileName))
+			assertNotExists(t, filepath.Join(tmpDir, kubeadmconstants.KubeletKubeConfigFileName))
+			assertDirEmpty(t, filepath.Join(tmpDir, "manifests"))
+			assertDirEmpty(t, filepath.Join(tmpDir, "pki"))
 
-		os.RemoveAll(tmpDir)
+			// Verify the files as requested by the test:
+			for _, path := range test.verifyExists {
+				assertExists(t, filepath.Join(tmpDir, path))
+			}
+			for _, path := range test.verifyNotExists {
+				assertNotExists(t, filepath.Join(tmpDir, path))
+			}
+
+			os.RemoveAll(tmpDir)
+		})
 	}
 }
 
@@ -273,74 +257,76 @@ func TestGetEtcdDataDir(t *testing.T) {
 		podYaml       string
 		expectErr     bool
 		writeManifest bool
-		validClient   bool
+		validConfig   bool
 	}{
 		"non-existent file returns error": {
 			expectErr:     true,
 			writeManifest: false,
-			validClient:   true,
+			validConfig:   true,
 		},
 		"return etcd data dir": {
 			dataDir:       "/path/to/etcd",
 			podYaml:       etcdPod,
 			expectErr:     false,
 			writeManifest: true,
-			validClient:   true,
+			validConfig:   true,
 		},
 		"invalid etcd pod": {
 			podYaml:       etcdPodInvalid,
 			expectErr:     true,
 			writeManifest: true,
-			validClient:   true,
+			validConfig:   true,
 		},
 		"etcd pod spec without data volume": {
 			podYaml:       etcdPodWithoutDataVolume,
 			expectErr:     true,
 			writeManifest: true,
-			validClient:   true,
+			validConfig:   true,
 		},
 		"kubeconfig file doesn't exist": {
 			dataDir:       "/path/to/etcd",
 			podYaml:       etcdPod,
 			expectErr:     false,
 			writeManifest: true,
-			validClient:   false,
+			validConfig:   false,
 		},
 	}
 
 	for name, test := range tests {
-		tmpdir := testutil.SetupTempDir(t)
-		defer os.RemoveAll(tmpdir)
+		t.Run(name, func(t *testing.T) {
+			tmpdir := testutil.SetupTempDir(t)
+			defer os.RemoveAll(tmpdir)
 
-		manifestPath := filepath.Join(tmpdir, "etcd.yaml")
-		if test.writeManifest {
-			err := ioutil.WriteFile(manifestPath, []byte(test.podYaml), 0644)
-			if err != nil {
-				t.Fatalf(dedent.Dedent("failed to write pod manifest\n%s\n\tfatal error: %v"), name, err)
+			manifestPath := filepath.Join(tmpdir, "etcd.yaml")
+			if test.writeManifest {
+				err := ioutil.WriteFile(manifestPath, []byte(test.podYaml), 0644)
+				if err != nil {
+					t.Fatalf(dedent.Dedent("failed to write pod manifest\n%s\n\tfatal error: %v"), name, err)
+				}
 			}
-		}
 
-		var dataDir string
-		var err error
-		if test.validClient {
-			client := clientsetfake.NewSimpleClientset()
-			dataDir, err = getEtcdDataDir(manifestPath, client)
-		} else {
-			dataDir, err = getEtcdDataDir(manifestPath, nil)
-		}
+			var dataDir string
+			var err error
+			if test.validConfig {
+				cfg := &kubeadmapi.InitConfiguration{}
+				dataDir, err = getEtcdDataDir(manifestPath, cfg)
+			} else {
+				dataDir, err = getEtcdDataDir(manifestPath, nil)
+			}
 
-		if (err != nil) != test.expectErr {
-			t.Fatalf(dedent.Dedent(
-				"getEtcdDataDir failed\n%s\nexpected error: %t\n\tgot: %t\nerror: %v"),
-				name,
-				test.expectErr,
-				(err != nil),
-				err,
-			)
-		}
+			if (err != nil) != test.expectErr {
+				t.Fatalf(dedent.Dedent(
+					"getEtcdDataDir failed\n%s\nexpected error: %t\n\tgot: %t\nerror: %v"),
+					name,
+					test.expectErr,
+					(err != nil),
+					err,
+				)
+			}
 
-		if dataDir != test.dataDir {
-			t.Fatalf(dedent.Dedent("getEtcdDataDir failed\n%s\n\texpected: %s\ngot: %s"), name, test.dataDir, dataDir)
-		}
+			if dataDir != test.dataDir {
+				t.Fatalf(dedent.Dedent("getEtcdDataDir failed\n%s\n\texpected: %s\ngot: %s"), name, test.dataDir, dataDir)
+			}
+		})
 	}
 }

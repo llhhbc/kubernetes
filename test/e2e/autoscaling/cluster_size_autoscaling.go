@@ -17,7 +17,6 @@ limitations under the License.
 package autoscaling
 
 import (
-	"bytes"
 	"fmt"
 	"io/ioutil"
 	"math"
@@ -31,7 +30,7 @@ import (
 
 	"k8s.io/api/core/v1"
 	policy "k8s.io/api/policy/v1beta1"
-	schedulerapi "k8s.io/api/scheduling/v1beta1"
+	schedulerapi "k8s.io/api/scheduling/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -44,6 +43,7 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
 	"k8s.io/kubernetes/test/e2e/scheduling"
 	testutils "k8s.io/kubernetes/test/utils"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -68,7 +68,6 @@ const (
 	makeSchedulableDelay   = 20 * time.Second
 	freshStatusLimit       = 20 * time.Second
 
-	gkeEndpoint        = "https://test-container.sandbox.googleapis.com"
 	gkeUpdateTimeout   = 15 * time.Minute
 	gkeNodepoolNameKey = "cloud.google.com/gke-nodepool"
 
@@ -917,10 +916,10 @@ var _ = SIGDescribe("Cluster size autoscaling [Slow]", func() {
 				defer framework.DeleteRCAndWaitForGC(f.ClientSet, f.Namespace.Name, "memory-reservation")
 				time.Sleep(scaleUpTimeout)
 				currentNodes := framework.GetReadySchedulableNodesOrDie(f.ClientSet)
-				framework.Logf("Currently available nodes: %v, nodes available at the start of test: %v, disabled nodes: %v", len(currentNodes.Items), len(nodes.Items), nodesToBreakCount)
+				e2elog.Logf("Currently available nodes: %v, nodes available at the start of test: %v, disabled nodes: %v", len(currentNodes.Items), len(nodes.Items), nodesToBreakCount)
 				Expect(len(currentNodes.Items)).Should(Equal(len(nodes.Items) - nodesToBreakCount))
 				status, err := getClusterwideStatus(c)
-				framework.Logf("Clusterwide status: %v", status)
+				e2elog.Logf("Clusterwide status: %v", status)
 				framework.ExpectNoError(err)
 				Expect(status).Should(Equal("Unhealthy"))
 			}
@@ -1035,13 +1034,24 @@ func runDrainTest(f *framework.Framework, migSizes map[string]int, namespace str
 	verifyFunction(increasedSize)
 }
 
+func getGkeApiEndpoint() string {
+	gkeApiEndpoint := os.Getenv("CLOUDSDK_API_ENDPOINT_OVERRIDES_CONTAINER")
+	if gkeApiEndpoint == "" {
+		gkeApiEndpoint = "https://test-container.sandbox.googleapis.com"
+	}
+	if strings.HasSuffix(gkeApiEndpoint, "/") {
+		gkeApiEndpoint = gkeApiEndpoint[:len(gkeApiEndpoint)-1]
+	}
+	return gkeApiEndpoint
+}
+
 func getGKEURL(apiVersion string, suffix string) string {
 	out, err := execCmd("gcloud", "auth", "print-access-token").Output()
 	framework.ExpectNoError(err)
 	token := strings.Replace(string(out), "\n", "", -1)
 
 	return fmt.Sprintf("%s/%s/%s?access_token=%s",
-		gkeEndpoint,
+		getGkeApiEndpoint(),
 		apiVersion,
 		suffix,
 		token)
@@ -1177,25 +1187,6 @@ func disableAutoscaler(nodePool string, minCount, maxCount int) error {
 	return fmt.Errorf("autoscaler still enabled, last error: %v", finalErr)
 }
 
-func executeHTTPRequest(method string, url string, body string) (string, error) {
-	client := &http.Client{}
-	req, err := http.NewRequest(method, url, strings.NewReader(body))
-	if err != nil {
-		By(fmt.Sprintf("Can't create request: %s", err.Error()))
-		return "", err
-	}
-	resp, err := client.Do(req)
-	respBody, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("error: %s %s", resp.Status, string(respBody))
-	}
-
-	return string(respBody), nil
-}
-
 func addNodePool(name string, machineType string, numNodes int) {
 	args := []string{"container", "node-pools", "create", name, "--quiet",
 		"--machine-type=" + machineType,
@@ -1282,32 +1273,11 @@ func getPoolSize(f *framework.Framework, poolName string) int {
 	return size
 }
 
-func doPut(url, content string) (string, error) {
-	req, err := http.NewRequest("PUT", url, bytes.NewBuffer([]byte(content)))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	strBody := string(body)
-	return strBody, nil
-}
-
 func reserveMemory(f *framework.Framework, id string, replicas, megabytes int, expectRunning bool, timeout time.Duration, selector map[string]string, tolerations []v1.Toleration, priorityClassName string) func() error {
 	By(fmt.Sprintf("Running RC which reserves %v MB of memory", megabytes))
 	request := int64(1024 * 1024 * megabytes / replicas)
 	config := &testutils.RCConfig{
 		Client:            f.ClientSet,
-		InternalClient:    f.InternalClientset,
 		Name:              id,
 		Namespace:         f.Namespace.Name,
 		Timeout:           timeout,
@@ -1549,15 +1519,14 @@ func ScheduleAnySingleGpuPod(f *framework.Framework, id string) error {
 // ScheduleGpuPod schedules a pod which requires a given number of gpus of given type
 func ScheduleGpuPod(f *framework.Framework, id string, gpuType string, gpuLimit int64) error {
 	config := &testutils.RCConfig{
-		Client:         f.ClientSet,
-		InternalClient: f.InternalClientset,
-		Name:           id,
-		Namespace:      f.Namespace.Name,
-		Timeout:        3 * scaleUpTimeout, // spinning up GPU node is slow
-		Image:          imageutils.GetPauseImageName(),
-		Replicas:       1,
-		GpuLimit:       gpuLimit,
-		Labels:         map[string]string{"requires-gpu": "yes"},
+		Client:    f.ClientSet,
+		Name:      id,
+		Namespace: f.Namespace.Name,
+		Timeout:   3 * scaleUpTimeout, // spinning up GPU node is slow
+		Image:     imageutils.GetPauseImageName(),
+		Replicas:  1,
+		GpuLimit:  gpuLimit,
+		Labels:    map[string]string{"requires-gpu": "yes"},
 	}
 
 	if gpuType != "" {
@@ -1574,15 +1543,14 @@ func ScheduleGpuPod(f *framework.Framework, id string, gpuType string, gpuLimit 
 // Create an RC running a given number of pods with anti-affinity
 func runAntiAffinityPods(f *framework.Framework, namespace string, pods int, id string, podLabels, antiAffinityLabels map[string]string) error {
 	config := &testutils.RCConfig{
-		Affinity:       buildAntiAffinity(antiAffinityLabels),
-		Client:         f.ClientSet,
-		InternalClient: f.InternalClientset,
-		Name:           id,
-		Namespace:      namespace,
-		Timeout:        scaleUpTimeout,
-		Image:          imageutils.GetPauseImageName(),
-		Replicas:       pods,
-		Labels:         podLabels,
+		Affinity:  buildAntiAffinity(antiAffinityLabels),
+		Client:    f.ClientSet,
+		Name:      id,
+		Namespace: namespace,
+		Timeout:   scaleUpTimeout,
+		Image:     imageutils.GetPauseImageName(),
+		Replicas:  pods,
+		Labels:    podLabels,
 	}
 	err := framework.RunRC(*config)
 	if err != nil {
@@ -1597,16 +1565,15 @@ func runAntiAffinityPods(f *framework.Framework, namespace string, pods int, id 
 
 func runVolumeAntiAffinityPods(f *framework.Framework, namespace string, pods int, id string, podLabels, antiAffinityLabels map[string]string, volumes []v1.Volume) error {
 	config := &testutils.RCConfig{
-		Affinity:       buildAntiAffinity(antiAffinityLabels),
-		Volumes:        volumes,
-		Client:         f.ClientSet,
-		InternalClient: f.InternalClientset,
-		Name:           id,
-		Namespace:      namespace,
-		Timeout:        scaleUpTimeout,
-		Image:          imageutils.GetPauseImageName(),
-		Replicas:       pods,
-		Labels:         podLabels,
+		Affinity:  buildAntiAffinity(antiAffinityLabels),
+		Volumes:   volumes,
+		Client:    f.ClientSet,
+		Name:      id,
+		Namespace: namespace,
+		Timeout:   scaleUpTimeout,
+		Image:     imageutils.GetPauseImageName(),
+		Replicas:  pods,
+		Labels:    podLabels,
 	}
 	err := framework.RunRC(*config)
 	if err != nil {
@@ -1680,15 +1647,14 @@ func runReplicatedPodOnEachNode(f *framework.Framework, nodes []v1.Node, namespa
 		}
 	}
 	config := &testutils.RCConfig{
-		Client:         f.ClientSet,
-		InternalClient: f.InternalClientset,
-		Name:           id,
-		Namespace:      namespace,
-		Timeout:        defaultTimeout,
-		Image:          imageutils.GetPauseImageName(),
-		Replicas:       0,
-		Labels:         labels,
-		MemRequest:     memRequest,
+		Client:     f.ClientSet,
+		Name:       id,
+		Namespace:  namespace,
+		Timeout:    defaultTimeout,
+		Image:      imageutils.GetPauseImageName(),
+		Replicas:   0,
+		Labels:     labels,
+		MemRequest: memRequest,
 	}
 	err := framework.RunRC(*config)
 	if err != nil {
@@ -1738,14 +1704,6 @@ func runReplicatedPodOnEachNode(f *framework.Framework, nodes []v1.Node, namespa
 		}
 	}
 	return nil
-}
-
-// wrap runReplicatedPodOnEachNode to return cleanup
-func runReplicatedPodOnEachNodeWithCleanup(f *framework.Framework, nodes []v1.Node, namespace string, podsPerNode int, id string, labels map[string]string, memRequest int64) (func(), error) {
-	err := runReplicatedPodOnEachNode(f, nodes, namespace, podsPerNode, id, labels, memRequest)
-	return func() {
-		framework.DeleteRCAndWaitForGC(f.ClientSet, namespace, id)
-	}, err
 }
 
 // Increase cluster size by newNodesForScaledownTests to create some unused nodes
@@ -1960,7 +1918,7 @@ func createPriorityClasses(f *framework.Framework) func() {
 		highPriorityClassName:       1000,
 	}
 	for className, priority := range priorityClasses {
-		_, err := f.ClientSet.SchedulingV1beta1().PriorityClasses().Create(&schedulerapi.PriorityClass{ObjectMeta: metav1.ObjectMeta{Name: className}, Value: priority})
+		_, err := f.ClientSet.SchedulingV1().PriorityClasses().Create(&schedulerapi.PriorityClass{ObjectMeta: metav1.ObjectMeta{Name: className}, Value: priority})
 		if err != nil {
 			klog.Errorf("Error creating priority class: %v", err)
 		}
@@ -1969,7 +1927,7 @@ func createPriorityClasses(f *framework.Framework) func() {
 
 	return func() {
 		for className := range priorityClasses {
-			err := f.ClientSet.SchedulingV1beta1().PriorityClasses().Delete(className, nil)
+			err := f.ClientSet.SchedulingV1().PriorityClasses().Delete(className, nil)
 			if err != nil {
 				klog.Errorf("Error deleting priority class: %v", err)
 			}

@@ -819,11 +819,12 @@ func admitPod(pod *api.Pod, pip *settingsv1alpha1.PodPreset) error {
 		api.Resource("pods").WithVersion("version"),
 		"",
 		kadmission.Create,
+		&metav1.CreateOptions{},
 		false,
 		&user.DefaultInfo{},
 	)
 
-	err := plugin.Admit(attrs)
+	err := plugin.Admit(attrs, nil)
 	if err != nil {
 		return err
 	}

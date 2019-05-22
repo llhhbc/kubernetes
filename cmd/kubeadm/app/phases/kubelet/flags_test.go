@@ -18,11 +18,12 @@ package kubelet
 
 import (
 	"context"
-	"errors"
 	"io"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/pkg/errors"
 
 	"k8s.io/api/core/v1"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
@@ -65,23 +66,23 @@ func (f fakeExecer) LookPath(file string) (string, error) { return "", errors.Ne
 var (
 	systemdCgroupExecer = fakeExecer{
 		ioMap: map[string]fakeCmd{
-			"docker info": {
-				b: []byte(`Cgroup Driver: systemd`),
+			"docker info -f {{.CgroupDriver}}": {
+				b: []byte(`systemd`),
 			},
 		},
 	}
 
 	cgroupfsCgroupExecer = fakeExecer{
 		ioMap: map[string]fakeCmd{
-			"docker info": {
-				b: []byte(`Cgroup Driver: cgroupfs`),
+			"docker info -f {{.CgroupDriver}}": {
+				b: []byte(`cgroupfs`),
 			},
 		},
 	}
 
 	errCgroupExecer = fakeExecer{
 		ioMap: map[string]fakeCmd{
-			"docker info": {
+			"docker info -f {{.CgroupDriver}}": {
 				err: errors.New("no such binary: docker"),
 			},
 		},

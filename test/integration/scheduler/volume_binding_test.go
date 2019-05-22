@@ -36,13 +36,14 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	utilfeaturetesting "k8s.io/apiserver/pkg/util/feature/testing"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/controller/volume/persistentvolume"
 	persistentvolumeoptions "k8s.io/kubernetes/pkg/controller/volume/persistentvolume/options"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/scheduler/algorithm/predicates"
+	schedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/volume"
 	volumetest "k8s.io/kubernetes/pkg/volume/testing"
 	imageutils "k8s.io/kubernetes/test/utils/image"
@@ -97,9 +98,8 @@ type testPVC struct {
 }
 
 func TestVolumeBinding(t *testing.T) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
-	config := setupCluster(t, "volume-scheduling-", 2, 0, 0, true)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
+	config := setupCluster(t, "volume-scheduling-", 2, 0, 0)
 	defer config.teardown()
 
 	cases := map[string]struct {
@@ -268,9 +268,8 @@ func TestVolumeBinding(t *testing.T) {
 
 // TestVolumeBindingRescheduling tests scheduler will retry scheduling when needed.
 func TestVolumeBindingRescheduling(t *testing.T) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
-	config := setupCluster(t, "volume-scheduling-", 2, 0, 0, true)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
+	config := setupCluster(t, "volume-scheduling-", 2, 0, 0)
 	defer config.teardown()
 
 	storageClassName := "local-storage"
@@ -412,9 +411,8 @@ func TestVolumeBindingDynamicStressSlow(t *testing.T) {
 }
 
 func testVolumeBindingStress(t *testing.T, schedulerResyncPeriod time.Duration, dynamic bool, provisionDelaySeconds int) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
-	config := setupCluster(t, "volume-binding-stress-", 1, schedulerResyncPeriod, provisionDelaySeconds, true)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
+	config := setupCluster(t, "volume-binding-stress-", 1, schedulerResyncPeriod, provisionDelaySeconds)
 	defer config.teardown()
 
 	// Set max volume limit to the number of PVCs the test will create
@@ -502,10 +500,8 @@ func testVolumeBindingStress(t *testing.T, schedulerResyncPeriod time.Duration, 
 }
 
 func testVolumeBindingWithAffinity(t *testing.T, anti bool, numNodes, numPods, numPVsFirstNode int) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
-	// TODO: disable equivalence cache until kubernetes/kubernetes#67680 is fixed
-	config := setupCluster(t, "volume-pod-affinity-", numNodes, 0, 0, true)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
+	config := setupCluster(t, "volume-pod-affinity-", numNodes, 0, 0)
 	defer config.teardown()
 
 	pods := []*v1.Pod{}
@@ -630,9 +626,8 @@ func TestVolumeBindingWithAffinity(t *testing.T) {
 }
 
 func TestPVAffinityConflict(t *testing.T) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
-	config := setupCluster(t, "volume-scheduling-", 3, 0, 0, true)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
+	config := setupCluster(t, "volume-scheduling-", 3, 0, 0)
 	defer config.teardown()
 
 	pv := makePV("local-pv", classImmediate, "", "", node1)
@@ -691,9 +686,8 @@ func TestPVAffinityConflict(t *testing.T) {
 }
 
 func TestVolumeProvision(t *testing.T) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
-	config := setupCluster(t, "volume-scheduling", 1, 0, 0, true)
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.PersistentLocalVolumes, true)()
+	config := setupCluster(t, "volume-scheduling", 1, 0, 0)
 	defer config.teardown()
 
 	cases := map[string]struct {
@@ -831,7 +825,6 @@ func TestVolumeProvision(t *testing.T) {
 // on provision failure.
 func TestRescheduleProvisioning(t *testing.T) {
 	// Set feature gates
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.VolumeScheduling, true)()
 	controllerCh := make(chan struct{})
 
 	context := initTestMaster(t, "reschedule-volume-provision", nil)
@@ -889,9 +882,9 @@ func TestRescheduleProvisioning(t *testing.T) {
 	}
 }
 
-func setupCluster(t *testing.T, nsName string, numberOfNodes int, resyncPeriod time.Duration, provisionDelaySeconds int, disableEquivalenceCache bool) *testConfig {
-	context := initTestSchedulerWithOptions(t, initTestMaster(t, nsName, nil), false, nil, nil, false, disableEquivalenceCache, resyncPeriod)
-
+func setupCluster(t *testing.T, nsName string, numberOfNodes int, resyncPeriod time.Duration, provisionDelaySeconds int) *testConfig {
+	context := initTestSchedulerWithOptions(t, initTestMaster(t, nsName, nil), false, nil, nil,
+		nil, []schedulerconfig.PluginConfig{}, false, resyncPeriod)
 	clientset := context.clientSet
 	ns := context.ns.Name
 
@@ -931,7 +924,7 @@ func setupCluster(t *testing.T, nsName string, numberOfNodes int, resyncPeriod t
 	}
 }
 
-func initPVController(context *TestContext, provisionDelaySeconds int) (*persistentvolume.PersistentVolumeController, informers.SharedInformerFactory, error) {
+func initPVController(context *testContext, provisionDelaySeconds int) (*persistentvolume.PersistentVolumeController, informers.SharedInformerFactory, error) {
 	clientset := context.clientSet
 	// Informers factory for controllers, we disable resync period for testing.
 	informerFactory := informers.NewSharedInformerFactory(clientset, 0)

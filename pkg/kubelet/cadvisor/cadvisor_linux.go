@@ -26,16 +26,26 @@ import (
 	"path"
 	"time"
 
+	// Register supported container handlers.
+	_ "github.com/google/cadvisor/container/containerd/install"
+	_ "github.com/google/cadvisor/container/crio/install"
+	_ "github.com/google/cadvisor/container/docker/install"
+	_ "github.com/google/cadvisor/container/systemd/install"
+
+	// Register cloud info providers.
+	// TODO(#76660): Remove this once the cAdvisor endpoints are removed.
+	_ "github.com/google/cadvisor/utils/cloudinfo/aws"
+	_ "github.com/google/cadvisor/utils/cloudinfo/azure"
+	_ "github.com/google/cadvisor/utils/cloudinfo/gce"
+
 	"github.com/google/cadvisor/cache/memory"
 	cadvisormetrics "github.com/google/cadvisor/container"
 	"github.com/google/cadvisor/events"
 	cadvisorapi "github.com/google/cadvisor/info/v1"
 	cadvisorapiv2 "github.com/google/cadvisor/info/v2"
 	"github.com/google/cadvisor/manager"
-	"github.com/google/cadvisor/metrics"
 	"github.com/google/cadvisor/utils/sysfs"
 	"k8s.io/klog"
-	"k8s.io/kubernetes/pkg/kubelet/types"
 )
 
 type cadvisorClient struct {
@@ -70,34 +80,6 @@ func init() {
 			klog.Errorf("Expected cAdvisor flag %q not found", name)
 		}
 	}
-}
-
-func containerLabels(c *cadvisorapi.ContainerInfo) map[string]string {
-	// Prometheus requires that all metrics in the same family have the same labels,
-	// so we arrange to supply blank strings for missing labels
-	var name, image, podName, namespace, containerName string
-	if len(c.Aliases) > 0 {
-		name = c.Aliases[0]
-	}
-	image = c.Spec.Image
-	if v, ok := c.Spec.Labels[types.KubernetesPodNameLabel]; ok {
-		podName = v
-	}
-	if v, ok := c.Spec.Labels[types.KubernetesPodNamespaceLabel]; ok {
-		namespace = v
-	}
-	if v, ok := c.Spec.Labels[types.KubernetesContainerNameLabel]; ok {
-		containerName = v
-	}
-	set := map[string]string{
-		metrics.LabelID:    c.Name,
-		metrics.LabelName:  name,
-		metrics.LabelImage: image,
-		"pod_name":         podName,
-		"namespace":        namespace,
-		"container_name":   containerName,
-	}
-	return set
 }
 
 func New(imageFsInfoProvider ImageFsInfoProvider, rootPath string, usingLegacyStats bool) (Interface, error) {
