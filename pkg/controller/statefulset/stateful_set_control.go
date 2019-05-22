@@ -322,7 +322,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				currentSet,
 				updateSet,
 				currentRevision.Name,
-				updateRevision.Name, ord)
+				updateRevision.Name, ord,
+				&status)
 		}
 	}
 
@@ -390,7 +391,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 				updateSet,
 				currentRevision.Name,
 				updateRevision.Name,
-				i)
+				i,
+				&status)
 		}
 		// If we find a Pod that has not been created we create the Pod
 		if !isCreated(replicas[i]) {
