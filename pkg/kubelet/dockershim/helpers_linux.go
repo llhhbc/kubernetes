@@ -29,8 +29,11 @@ import (
 
 	"github.com/blang/semver"
 	dockertypes "github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/blkiodev"
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/klog"
 	runtimeapi "k8s.io/kubernetes/pkg/kubelet/apis/cri/runtime/v1alpha2"
 )
 
@@ -93,6 +96,32 @@ func getSeccompSecurityOpts(seccompProfile string, separator rune) ([]string, er
 	return fmtDockerOpts(seccompOpts, separator), nil
 }
 
+// parse  /root/a:1k;/root/b:2k
+// skip if parse error
+func parseThrottleDevice(configString string) []*blkiodev.ThrottleDevice {
+	res := make([]*blkiodev.ThrottleDevice, 0)
+	configList := strings.Split(configString, ";")
+	for _, con := range configList {
+		vals := strings.Split(con, ":")
+
+		if len(vals) < 2 {
+			klog.Errorf("parseThrottleDevice: invalid config: %s, will skip ", con)
+			continue
+		}
+		rate, err := resource.ParseQuantity(vals[1])
+		if err != nil {
+			klog.Errorf("parseThrottleDevice: parse quantity failed %s %v. ", vals[1], err)
+			continue
+		}
+
+		res = append(res, &blkiodev.ThrottleDevice{
+			Path: vals[0],
+			Rate: uint64(rate.Value()),
+		})
+	}
+	return res
+}
+
 func (ds *dockerService) updateCreateConfig(
 	createConfig *dockertypes.ContainerCreateConfig,
 	config *runtimeapi.ContainerConfig,
@@ -115,6 +144,26 @@ func (ds *dockerService) updateCreateConfig(
 			createConfig.HostConfig.OomScoreAdj = int(rOpts.OomScoreAdj)
 		}
 		// Note: ShmSize is handled in kube_docker_client.go
+
+		// here to add iops
+		klog.Warningf("my test for debug, get annotation: %#v. ", config.Annotations)
+		res := &createConfig.HostConfig.Resources
+		for k, v := range config.Annotations {
+			switch k {
+			case "device-read-bps":
+				res.BlkioDeviceReadBps = append(res.BlkioDeviceReadBps, parseThrottleDevice(v)...)
+				klog.Infof("parseThrottleDevice: add iops config from annotation ok: %#v. ", res.BlkioDeviceWriteIOps)
+			case "device-write-bps":
+				res.BlkioDeviceWriteBps = append(res.BlkioDeviceWriteBps, parseThrottleDevice(v)...)
+				klog.Infof("parseThrottleDevice: add iops config from annotation ok: %#v. ", res.BlkioDeviceWriteIOps)
+			case "device-read-iops":
+				res.BlkioDeviceReadIOps = append(res.BlkioDeviceReadIOps, parseThrottleDevice(v)...)
+				klog.Infof("parseThrottleDevice: add iops config from annotation ok: %#v. ", res.BlkioDeviceWriteIOps)
+			case "device-write-iops":
+				res.BlkioDeviceWriteIOps = append(res.BlkioDeviceWriteIOps, parseThrottleDevice(v)...)
+				klog.Infof("parseThrottleDevice: add iops config from annotation ok: %#v. ", res.BlkioDeviceWriteIOps)
+			}
+		}
 
 		// Apply security context.
 		if err := applyContainerSecurityContext(lc, podSandboxID, createConfig.Config, createConfig.HostConfig, securityOptSep); err != nil {
