@@ -30,23 +30,22 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
+	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/healthz"
 	"k8s.io/apiserver/pkg/server/mux"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	"k8s.io/apiserver/pkg/util/term"
 	cacheddiscovery "k8s.io/client-go/discovery/cached"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
+	"k8s.io/client-go/metadata/metadatainformer"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/leaderelection"
@@ -56,19 +55,20 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/component-base/cli/globalflag"
-	"k8s.io/klog"
-	genericcontrollermanager "k8s.io/kubernetes/cmd/controller-manager/app"
+	"k8s.io/component-base/configz"
+	"k8s.io/component-base/term"
+	"k8s.io/component-base/version"
+	"k8s.io/component-base/version/verflag"
+	genericcontrollermanager "k8s.io/controller-manager/app"
+	"k8s.io/controller-manager/pkg/clientbuilder"
+	"k8s.io/controller-manager/pkg/informerfactory"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-controller-manager/app/config"
 	"k8s.io/kubernetes/cmd/kube-controller-manager/app/options"
 	"k8s.io/kubernetes/pkg/controller"
 	kubectrlmgrconfig "k8s.io/kubernetes/pkg/controller/apis/config"
 	serviceaccountcontroller "k8s.io/kubernetes/pkg/controller/serviceaccount"
-	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/serviceaccount"
-	"k8s.io/kubernetes/pkg/util/configz"
-	utilflag "k8s.io/kubernetes/pkg/util/flag"
-	"k8s.io/kubernetes/pkg/version"
-	"k8s.io/kubernetes/pkg/version/verflag"
 )
 
 const (
@@ -105,9 +105,16 @@ state of the cluster through the apiserver and makes changes attempting to move 
 current state towards the desired state. Examples of controllers that ship with
 Kubernetes today are the replication controller, endpoints controller, namespace
 controller, and serviceaccounts controller.`,
+		PersistentPreRunE: func(*cobra.Command, []string) error {
+			// silence client-go warnings.
+			// kube-controller-manager generically watches APIs (including deprecated ones),
+			// and CI ensures it works properly against matching kube-apiserver versions.
+			restclient.SetDefaultWarningHandler(restclient.NoWarnings{})
+			return nil
+		},
 		Run: func(cmd *cobra.Command, args []string) {
 			verflag.PrintAndExitIfRequested()
-			utilflag.PrintFlags(cmd.Flags())
+			cliflag.PrintFlags(cmd.Flags())
 
 			c, err := s.Config(KnownControllers(), ControllersDisabledByDefault.List())
 			if err != nil {
@@ -120,16 +127,21 @@ controller, and serviceaccounts controller.`,
 				os.Exit(1)
 			}
 		},
+		Args: func(cmd *cobra.Command, args []string) error {
+			for _, arg := range args {
+				if len(arg) > 0 {
+					return fmt.Errorf("%q does not take any arguments, got %q", cmd.CommandPath(), args)
+				}
+			}
+			return nil
+		},
 	}
 
 	fs := cmd.Flags()
 	namedFlagSets := s.Flags(KnownControllers(), ControllersDisabledByDefault.List())
 	verflag.AddFlags(namedFlagSets.FlagSet("global"))
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name())
-	// hoist this flag from the global flagset to preserve the commandline until
-	// the gce cloudprovider is removed.
-	globalflag.Register(namedFlagSets.FlagSet("generic"), "cloud-provider-gce-lb-src-cidrs")
-	namedFlagSets.FlagSet("generic").MarkDeprecated("cloud-provider-gce-lb-src-cidrs", "This flag will be removed once the GCE Cloud Provider is removed from kube-controller-manager")
+	registerLegacyGlobalFlags(namedFlagSets)
 	for _, f := range namedFlagSets.FlagSets {
 		fs.AddFlagSet(f)
 	}
@@ -166,11 +178,11 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 	if cfgz, err := configz.New(ConfigzName); err == nil {
 		cfgz.Set(c.ComponentConfig)
 	} else {
-		klog.Errorf("unable to register configz: %c", err)
+		klog.Errorf("unable to register configz: %v", err)
 	}
 
 	// Setup any healthz checks we will want to use.
-	var checks []healthz.HealthzChecker
+	var checks []healthz.HealthChecker
 	var electionChecker *leaderelection.HealthzAdaptor
 	if c.ComponentConfig.Generic.LeaderElection.LeaderElect {
 		electionChecker = leaderelection.NewLeaderHealthzAdaptor(time.Second * 20)
@@ -198,10 +210,10 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 	}
 
 	run := func(ctx context.Context) {
-		rootClientBuilder := controller.SimpleControllerClientBuilder{
+		rootClientBuilder := clientbuilder.SimpleControllerClientBuilder{
 			ClientConfig: c.Kubeconfig,
 		}
-		var clientBuilder controller.ControllerClientBuilder
+		var clientBuilder clientbuilder.ControllerClientBuilder
 		if c.ComponentConfig.KubeCloudShared.UseServiceAccountCredentials {
 			if len(c.ComponentConfig.SAController.ServiceAccountKeyFile) == 0 {
 				// It's possible another controller process is creating the tokens for us.
@@ -218,7 +230,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 					"kube-system")
 			} else {
 				klog.V(1).Infof("using legacy client builder")
-				clientBuilder = controller.SAControllerClientBuilder{
+				clientBuilder = clientbuilder.SAControllerClientBuilder{
 					ClientConfig:         restclient.AnonymousClientConfig(c.Kubeconfig),
 					CoreClient:           c.Client.CoreV1(),
 					AuthenticationClient: c.Client.AuthenticationV1(),
@@ -239,7 +251,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 		}
 
 		controllerContext.InformerFactory.Start(controllerContext.Stop)
-		controllerContext.GenericInformerFactory.Start(controllerContext.Stop)
+		controllerContext.ObjectOrMetadataInformerFactory.Start(controllerContext.Stop)
 		close(controllerContext.InformersStarted)
 
 		select {}
@@ -257,9 +269,10 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 
 	// add a uniquifier so that two processes on the same host don't accidentally both become active
 	id = id + "_" + string(uuid.NewUUID())
+
 	rl, err := resourcelock.New(c.ComponentConfig.Generic.LeaderElection.ResourceLock,
-		"kube-system",
-		"kube-controller-manager",
+		c.ComponentConfig.Generic.LeaderElection.ResourceNamespace,
+		c.ComponentConfig.Generic.LeaderElection.ResourceName,
 		c.LeaderElectionClient.CoreV1(),
 		c.LeaderElectionClient.CoordinationV1(),
 		resourcelock.ResourceLockConfig{
@@ -290,14 +303,16 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 // ControllerContext defines the context object for controller
 type ControllerContext struct {
 	// ClientBuilder will provide a client for this controller to use
-	ClientBuilder controller.ControllerClientBuilder
+	ClientBuilder clientbuilder.ControllerClientBuilder
 
 	// InformerFactory gives access to informers for the controller.
 	InformerFactory informers.SharedInformerFactory
 
-	// GenericInformerFactory gives access to informers for typed resources
-	// and dynamic resources.
-	GenericInformerFactory controller.InformerFactory
+	// ObjectOrMetadataInformerFactory gives access to informers for typed resources
+	// and dynamic resources by their metadata. All generic controllers currently use
+	// object metadata - if a future controller needs access to the full object this
+	// would become GenericInformerFactory and take a dynamic client.
+	ObjectOrMetadataInformerFactory informerfactory.InformerFactory
 
 	// ComponentConfig provides access to init options for a given controller
 	ComponentConfig kubectrlmgrconfig.KubeControllerManagerConfiguration
@@ -372,6 +387,8 @@ const (
 func NewControllerInitializers(loopMode ControllerLoopMode) map[string]InitFunc {
 	controllers := map[string]InitFunc{}
 	controllers["endpoint"] = startEndpointController
+	controllers["endpointslice"] = startEndpointSliceController
+	controllers["endpointslicemirroring"] = startEndpointSliceMirroringController
 	controllers["replicationcontroller"] = startReplicationController
 	controllers["podgc"] = startPodGCController
 	controllers["resourcequota"] = startResourceQuotaController
@@ -408,6 +425,11 @@ func NewControllerInitializers(loopMode ControllerLoopMode) map[string]InitFunc 
 	controllers["pv-protection"] = startPVProtectionController
 	controllers["ttl-after-finished"] = startTTLAfterFinishedController
 	controllers["root-ca-cert-publisher"] = startRootCACertPublisher
+	controllers["ephemeral-volume"] = startEphemeralVolumeController
+	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerIdentity) &&
+		utilfeature.DefaultFeatureGate.Enabled(genericfeatures.StorageVersionAPI) {
+		controllers["storage-version-gc"] = startStorageVersionGCController
+	}
 
 	return controllers
 }
@@ -416,10 +438,10 @@ func NewControllerInitializers(loopMode ControllerLoopMode) map[string]InitFunc 
 // TODO: In general, any controller checking this needs to be dynamic so
 // users don't have to restart their controller manager if they change the apiserver.
 // Until we get there, the structure here needs to be exposed for the construction of a proper ControllerContext.
-func GetAvailableResources(clientBuilder controller.ControllerClientBuilder) (map[schema.GroupVersionResource]bool, error) {
+func GetAvailableResources(clientBuilder clientbuilder.ControllerClientBuilder) (map[schema.GroupVersionResource]bool, error) {
 	client := clientBuilder.ClientOrDie("controller-discovery")
 	discoveryClient := client.Discovery()
-	resourceMap, err := discoveryClient.ServerResources()
+	_, resourceMap, err := discoveryClient.ServerGroupsAndResources()
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("unable to get all supported resources from server: %v", err))
 	}
@@ -444,12 +466,12 @@ func GetAvailableResources(clientBuilder controller.ControllerClientBuilder) (ma
 // CreateControllerContext creates a context struct containing references to resources needed by the
 // controllers such as the cloud provider and clientBuilder. rootClientBuilder is only used for
 // the shared-informers client and token controller.
-func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clientBuilder controller.ControllerClientBuilder, stop <-chan struct{}) (ControllerContext, error) {
+func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clientBuilder clientbuilder.ControllerClientBuilder, stop <-chan struct{}) (ControllerContext, error) {
 	versionedClient := rootClientBuilder.ClientOrDie("shared-informers")
 	sharedInformers := informers.NewSharedInformerFactory(versionedClient, ResyncPeriod(s)())
 
-	dynamicClient := dynamic.NewForConfigOrDie(rootClientBuilder.ConfigOrDie("dynamic-informers"))
-	dynamicInformers := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, ResyncPeriod(s)())
+	metadataClient := metadata.NewForConfigOrDie(rootClientBuilder.ConfigOrDie("metadata-informers"))
+	metadataInformers := metadatainformer.NewSharedInformerFactory(metadataClient, ResyncPeriod(s)())
 
 	// If apiserver is not running we should wait for some time and fail only then. This is particularly
 	// important when we start apiserver and controller manager at the same time.
@@ -477,17 +499,17 @@ func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clien
 	}
 
 	ctx := ControllerContext{
-		ClientBuilder:          clientBuilder,
-		InformerFactory:        sharedInformers,
-		GenericInformerFactory: controller.NewInformerFactory(sharedInformers, dynamicInformers),
-		ComponentConfig:        s.ComponentConfig,
-		RESTMapper:             restMapper,
-		AvailableResources:     availableResources,
-		Cloud:                  cloud,
-		LoopMode:               loopMode,
-		Stop:                   stop,
-		InformersStarted:       make(chan struct{}),
-		ResyncPeriod:           ResyncPeriod(s),
+		ClientBuilder:                   clientBuilder,
+		InformerFactory:                 sharedInformers,
+		ObjectOrMetadataInformerFactory: informerfactory.NewInformerFactory(sharedInformers, metadataInformers),
+		ComponentConfig:                 s.ComponentConfig,
+		RESTMapper:                      restMapper,
+		AvailableResources:              availableResources,
+		Cloud:                           cloud,
+		LoopMode:                        loopMode,
+		Stop:                            stop,
+		InformersStarted:                make(chan struct{}),
+		ResyncPeriod:                    ResyncPeriod(s),
 	}
 	return ctx, nil
 }
@@ -539,7 +561,7 @@ func StartControllers(ctx ControllerContext, startSATokenController InitFunc, co
 // It cannot use the "normal" client builder, so it tracks its own. It must also avoid being included in the "normal"
 // init map so that it can always run first.
 type serviceAccountTokenControllerStarter struct {
-	rootClientBuilder controller.ControllerClientBuilder
+	rootClientBuilder clientbuilder.ControllerClientBuilder
 }
 
 func (c serviceAccountTokenControllerStarter) startServiceAccountTokenController(ctx ControllerContext) (http.Handler, bool, error) {
@@ -603,9 +625,6 @@ func readCA(file string) ([]byte, error) {
 }
 
 func shouldTurnOnDynamicClient(client clientset.Interface) bool {
-	if !utilfeature.DefaultFeatureGate.Enabled(features.TokenRequest) {
-		return false
-	}
 	apiResourceList, err := client.Discovery().ServerResourcesForGroupVersion(v1.SchemeGroupVersion.String())
 	if err != nil {
 		klog.Warningf("fetch api resource lists failed, use legacy client builder: %v", err)

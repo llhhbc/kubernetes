@@ -9,6 +9,7 @@ go_library(
         "path.go",
         "report.go",
         "report_compare.go",
+        "report_references.go",
         "report_reflect.go",
         "report_slices.go",
         "report_text.go",
@@ -36,6 +37,7 @@ filegroup(
     name = "all-srcs",
     srcs = [
         ":package-srcs",
+        "//vendor/github.com/google/go-cmp/cmp/cmpopts:all-srcs",
         "//vendor/github.com/google/go-cmp/cmp/internal/diff:all-srcs",
         "//vendor/github.com/google/go-cmp/cmp/internal/flags:all-srcs",
         "//vendor/github.com/google/go-cmp/cmp/internal/function:all-srcs",

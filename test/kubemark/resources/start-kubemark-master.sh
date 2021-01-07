@@ -257,7 +257,6 @@ function load-docker-images {
 # Computes command line arguments to be passed to kubelet.
 function compute-kubelet-params {
 	local params="${KUBELET_TEST_ARGS:-}"
-	params+=" --allow-privileged=true"
 	params+=" --cgroup-root=/"
 	params+=" --cloud-provider=gce"
 	params+=" --pod-manifest-path=/etc/kubernetes/manifests"
@@ -369,7 +368,6 @@ function create-master-audit-policy {
       - group: "networking.k8s.io"
       - group: "policy"
       - group: "rbac.authorization.k8s.io"
-      - group: "settings.k8s.io"
       - group: "storage.k8s.io"'
 
   cat <<EOF >"${path}"
@@ -548,7 +546,6 @@ function compute-kube-apiserver-params {
 	params+=" --client-ca-file=/etc/srv/kubernetes/ca.crt"
 	params+=" --token-auth-file=/etc/srv/kubernetes/known_tokens.csv"
 	params+=" --secure-port=443"
-	params+=" --basic-auth-file=/etc/srv/kubernetes/basic_auth.csv"
 	params+=" --target-ram-mb=$((NUM_NODES * 60))"
 	params+=" --service-cluster-ip-range=${SERVICE_CLUSTER_IP_RANGE}"
 	params+=" --admission-control=${CUSTOM_ADMISSION_PLUGINS}"
@@ -777,4 +774,4 @@ until [ "$(curl 127.0.0.1:8080/healthz 2> /dev/null)" == "ok" ]; do
 	fi
 done
 
-echo "Done for the configuration for kubermark master"
+echo "Done for the configuration for kubemark master"

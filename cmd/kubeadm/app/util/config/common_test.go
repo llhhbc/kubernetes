@@ -70,6 +70,13 @@ func TestValidateSupportedVersion(t *testing.T) {
 				Group:   KubeadmGroupName,
 				Version: "v1beta1",
 			},
+			allowDeprecated: true,
+		},
+		{
+			gv: schema.GroupVersion{
+				Group:   KubeadmGroupName,
+				Version: "v1beta1",
+			},
 		},
 		{
 			gv: schema.GroupVersion{
@@ -125,11 +132,9 @@ func TestLowercaseSANs(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			cfg := &kubeadmapiv1beta2.InitConfiguration{
-				ClusterConfiguration: kubeadmapiv1beta2.ClusterConfiguration{
-					APIServer: kubeadmapiv1beta2.APIServer{
-						CertSANs: test.in,
-					},
+			cfg := &kubeadmapiv1beta2.ClusterConfiguration{
+				APIServer: kubeadmapiv1beta2.APIServer{
+					CertSANs: test.in,
 				},
 			}
 
@@ -163,13 +168,13 @@ func TestVerifyAPIServerBindAddress(t *testing.T) {
 			address: "2001:db8:85a3::8a2e:370:7334",
 		},
 		{
-			name:          "invalid address: not a global unicast 0.0.0.0",
-			address:       "0.0.0.0",
-			expectedError: true,
+			name:          "valid address 127.0.0.1",
+			address:       "127.0.0.1",
+			expectedError: false,
 		},
 		{
-			name:          "invalid address: not a global unicast 127.0.0.1",
-			address:       "127.0.0.1",
+			name:          "invalid address: not a global unicast 0.0.0.0",
+			address:       "0.0.0.0",
 			expectedError: true,
 		},
 		{

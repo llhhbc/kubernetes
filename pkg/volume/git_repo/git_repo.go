@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/volume"
 	volumeutil "k8s.io/kubernetes/pkg/volume/util"
@@ -77,11 +77,7 @@ func (plugin *gitRepoPlugin) CanSupport(spec *volume.Spec) bool {
 	return spec.Volume != nil && spec.Volume.GitRepo != nil
 }
 
-func (plugin *gitRepoPlugin) IsMigratedToCSI() bool {
-	return false
-}
-
-func (plugin *gitRepoPlugin) RequiresRemount() bool {
+func (plugin *gitRepoPlugin) RequiresRemount(spec *volume.Spec) bool {
 	return false
 }
 
@@ -179,12 +175,12 @@ func (b *gitRepoVolumeMounter) CanMount() error {
 }
 
 // SetUp creates new directory and clones a git repo.
-func (b *gitRepoVolumeMounter) SetUp(fsGroup *int64) error {
-	return b.SetUpAt(b.GetPath(), fsGroup)
+func (b *gitRepoVolumeMounter) SetUp(mounterArgs volume.MounterArgs) error {
+	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
 // SetUpAt creates new directory and clones a git repo.
-func (b *gitRepoVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (b *gitRepoVolumeMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	if volumeutil.IsReady(b.getMetaDir()) {
 		return nil
 	}
@@ -194,7 +190,7 @@ func (b *gitRepoVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 	if err != nil {
 		return err
 	}
-	if err := wrapped.SetUpAt(dir, fsGroup); err != nil {
+	if err := wrapped.SetUpAt(dir, mounterArgs); err != nil {
 		return err
 	}
 
@@ -240,7 +236,7 @@ func (b *gitRepoVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 		return fmt.Errorf("failed to exec 'git reset --hard': %s: %v", output, err)
 	}
 
-	volume.SetVolumeOwnership(b, fsGroup)
+	volume.SetVolumeOwnership(b, mounterArgs.FsGroup, nil /*fsGroupChangePolicy*/, volumeutil.FSGroupCompleteHook(b.plugin, nil))
 
 	volumeutil.SetReady(b.getMetaDir())
 	return nil

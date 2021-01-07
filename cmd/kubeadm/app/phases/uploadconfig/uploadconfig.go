@@ -24,12 +24,11 @@ import (
 	rbac "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 	kubeadmapi "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm"
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/apiclient"
 	configutil "k8s.io/kubernetes/cmd/kubeadm/app/util/config"
-	rbachelper "k8s.io/kubernetes/pkg/apis/rbac/v1"
 )
 
 const (
@@ -71,7 +70,7 @@ func UploadConfiguration(cfg *kubeadmapi.InitConfiguration, client clientset.Int
 	// The components store their config in their own ConfigMaps, then reset the .ComponentConfig struct;
 	// We don't want to mutate the cfg itself, so create a copy of it using .DeepCopy of it first
 	clusterConfigurationToUpload := cfg.ClusterConfiguration.DeepCopy()
-	clusterConfigurationToUpload.ComponentConfigs = kubeadmapi.ComponentConfigs{}
+	clusterConfigurationToUpload.ComponentConfigs = kubeadmapi.ComponentConfigMap{}
 
 	// Marshal the ClusterConfiguration into YAML
 	clusterConfigurationYaml, err := configutil.MarshalKubeadmConfigObject(clusterConfigurationToUpload)
@@ -127,7 +126,12 @@ func UploadConfiguration(cfg *kubeadmapi.InitConfiguration, client clientset.Int
 			Namespace: metav1.NamespaceSystem,
 		},
 		Rules: []rbac.PolicyRule{
-			rbachelper.NewRule("get").Groups("").Resources("configmaps").Names(kubeadmconstants.KubeadmConfigConfigMap).RuleOrDie(),
+			{
+				Verbs:         []string{"get"},
+				APIGroups:     []string{""},
+				Resources:     []string{"configmaps"},
+				ResourceNames: []string{kubeadmconstants.KubeadmConfigConfigMap},
+			},
 		},
 	})
 	if err != nil {

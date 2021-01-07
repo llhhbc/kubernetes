@@ -47,7 +47,7 @@ func newTestHost(t *testing.T, clientset clientset.Interface) (string, volume.Vo
 	if err != nil {
 		t.Fatalf("can't make a temp rootdir: %v", err)
 	}
-	return tempDir, volumetest.NewFakeVolumeHost(tempDir, clientset, emptydir.ProbeVolumePlugins())
+	return tempDir, volumetest.NewFakeVolumeHost(t, tempDir, clientset, emptydir.ProbeVolumePlugins())
 }
 
 func TestCanSupport(t *testing.T) {
@@ -253,7 +253,7 @@ func newDownwardAPITest(t *testing.T, name string, volumeFiles, podLabels, podAn
 
 	volumePath := mounter.GetPath()
 
-	err = mounter.SetUp(nil)
+	err = mounter.SetUp(volume.MounterArgs{})
 	if err != nil {
 		t.Errorf("Failed to setup volume: %v", err)
 	}
@@ -380,7 +380,7 @@ func (step reSetUp) run(test *downwardAPITest) {
 	}
 
 	// now re-run Setup
-	if err = test.mounter.SetUp(nil); err != nil {
+	if err = test.mounter.SetUp(volume.MounterArgs{}); err != nil {
 		test.t.Errorf("Failed to re-setup volume: %v", err)
 	}
 

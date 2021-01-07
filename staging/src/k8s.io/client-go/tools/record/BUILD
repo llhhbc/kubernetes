@@ -26,7 +26,7 @@ go_library(
         "//staging/src/k8s.io/client-go/tools/reference:go_default_library",
         "//staging/src/k8s.io/client-go/util/flowcontrol:go_default_library",
         "//vendor/github.com/golang/groupcache/lru:go_default_library",
-        "//vendor/k8s.io/klog:go_default_library",
+        "//vendor/k8s.io/klog/v2:go_default_library",
     ],
 )
 
@@ -35,6 +35,7 @@ go_test(
     srcs = [
         "event_test.go",
         "events_cache_test.go",
+        "main_test.go",
     ],
     embed = [":go_default_library"],
     deps = [

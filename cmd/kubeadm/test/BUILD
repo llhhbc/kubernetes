@@ -16,7 +16,6 @@ go_library(
         "//cmd/kubeadm/app/util/certs:go_default_library",
         "//cmd/kubeadm/app/util/config:go_default_library",
         "//cmd/kubeadm/app/util/pkiutil:go_default_library",
-        "//vendor/github.com/lithammer/dedent:go_default_library",
     ],
 )
 
@@ -33,6 +32,7 @@ filegroup(
         ":package-srcs",
         "//cmd/kubeadm/test/cmd:all-srcs",
         "//cmd/kubeadm/test/kubeconfig:all-srcs",
+        "//cmd/kubeadm/test/resources:all-srcs",
     ],
     tags = ["automanaged"],
 )

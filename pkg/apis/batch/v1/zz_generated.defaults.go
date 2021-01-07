@@ -21,6 +21,8 @@ limitations under the License.
 package v1
 
 import (
+	"reflect"
+
 	v1 "k8s.io/api/batch/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	corev1 "k8s.io/kubernetes/pkg/apis/core/v1"
@@ -88,13 +90,22 @@ func SetObjectDefaults_Job(in *v1.Job) {
 		if a.VolumeSource.ScaleIO != nil {
 			corev1.SetDefaults_ScaleIOVolumeSource(a.VolumeSource.ScaleIO)
 		}
+		if a.VolumeSource.Ephemeral != nil {
+			if a.VolumeSource.Ephemeral.VolumeClaimTemplate != nil {
+				corev1.SetDefaults_PersistentVolumeClaimSpec(&a.VolumeSource.Ephemeral.VolumeClaimTemplate.Spec)
+				corev1.SetDefaults_ResourceList(&a.VolumeSource.Ephemeral.VolumeClaimTemplate.Spec.Resources.Limits)
+				corev1.SetDefaults_ResourceList(&a.VolumeSource.Ephemeral.VolumeClaimTemplate.Spec.Resources.Requests)
+			}
+		}
 	}
 	for i := range in.Spec.Template.Spec.InitContainers {
 		a := &in.Spec.Template.Spec.InitContainers[i]
 		corev1.SetDefaults_Container(a)
 		for j := range a.Ports {
 			b := &a.Ports[j]
-			corev1.SetDefaults_ContainerPort(b)
+			if reflect.ValueOf(b.Protocol).IsZero() {
+				b.Protocol = "TCP"
+			}
 		}
 		for j := range a.Env {
 			b := &a.Env[j]
@@ -118,6 +129,12 @@ func SetObjectDefaults_Job(in *v1.Job) {
 				corev1.SetDefaults_HTTPGetAction(a.ReadinessProbe.Handler.HTTPGet)
 			}
 		}
+		if a.StartupProbe != nil {
+			corev1.SetDefaults_Probe(a.StartupProbe)
+			if a.StartupProbe.Handler.HTTPGet != nil {
+				corev1.SetDefaults_HTTPGetAction(a.StartupProbe.Handler.HTTPGet)
+			}
+		}
 		if a.Lifecycle != nil {
 			if a.Lifecycle.PostStart != nil {
 				if a.Lifecycle.PostStart.HTTPGet != nil {
@@ -129,9 +146,6 @@ func SetObjectDefaults_Job(in *v1.Job) {
 					corev1.SetDefaults_HTTPGetAction(a.Lifecycle.PreStop.HTTPGet)
 				}
 			}
-		}
-		if a.SecurityContext != nil {
-			corev1.SetDefaults_SecurityContext(a.SecurityContext)
 		}
 	}
 	for i := range in.Spec.Template.Spec.Containers {
@@ -139,7 +153,9 @@ func SetObjectDefaults_Job(in *v1.Job) {
 		corev1.SetDefaults_Container(a)
 		for j := range a.Ports {
 			b := &a.Ports[j]
-			corev1.SetDefaults_ContainerPort(b)
+			if reflect.ValueOf(b.Protocol).IsZero() {
+				b.Protocol = "TCP"
+			}
 		}
 		for j := range a.Env {
 			b := &a.Env[j]
@@ -163,6 +179,12 @@ func SetObjectDefaults_Job(in *v1.Job) {
 				corev1.SetDefaults_HTTPGetAction(a.ReadinessProbe.Handler.HTTPGet)
 			}
 		}
+		if a.StartupProbe != nil {
+			corev1.SetDefaults_Probe(a.StartupProbe)
+			if a.StartupProbe.Handler.HTTPGet != nil {
+				corev1.SetDefaults_HTTPGetAction(a.StartupProbe.Handler.HTTPGet)
+			}
+		}
 		if a.Lifecycle != nil {
 			if a.Lifecycle.PostStart != nil {
 				if a.Lifecycle.PostStart.HTTPGet != nil {
@@ -175,10 +197,58 @@ func SetObjectDefaults_Job(in *v1.Job) {
 				}
 			}
 		}
-		if a.SecurityContext != nil {
-			corev1.SetDefaults_SecurityContext(a.SecurityContext)
+	}
+	for i := range in.Spec.Template.Spec.EphemeralContainers {
+		a := &in.Spec.Template.Spec.EphemeralContainers[i]
+		corev1.SetDefaults_EphemeralContainer(a)
+		for j := range a.EphemeralContainerCommon.Ports {
+			b := &a.EphemeralContainerCommon.Ports[j]
+			if reflect.ValueOf(b.Protocol).IsZero() {
+				b.Protocol = "TCP"
+			}
+		}
+		for j := range a.EphemeralContainerCommon.Env {
+			b := &a.EphemeralContainerCommon.Env[j]
+			if b.ValueFrom != nil {
+				if b.ValueFrom.FieldRef != nil {
+					corev1.SetDefaults_ObjectFieldSelector(b.ValueFrom.FieldRef)
+				}
+			}
+		}
+		corev1.SetDefaults_ResourceList(&a.EphemeralContainerCommon.Resources.Limits)
+		corev1.SetDefaults_ResourceList(&a.EphemeralContainerCommon.Resources.Requests)
+		if a.EphemeralContainerCommon.LivenessProbe != nil {
+			corev1.SetDefaults_Probe(a.EphemeralContainerCommon.LivenessProbe)
+			if a.EphemeralContainerCommon.LivenessProbe.Handler.HTTPGet != nil {
+				corev1.SetDefaults_HTTPGetAction(a.EphemeralContainerCommon.LivenessProbe.Handler.HTTPGet)
+			}
+		}
+		if a.EphemeralContainerCommon.ReadinessProbe != nil {
+			corev1.SetDefaults_Probe(a.EphemeralContainerCommon.ReadinessProbe)
+			if a.EphemeralContainerCommon.ReadinessProbe.Handler.HTTPGet != nil {
+				corev1.SetDefaults_HTTPGetAction(a.EphemeralContainerCommon.ReadinessProbe.Handler.HTTPGet)
+			}
+		}
+		if a.EphemeralContainerCommon.StartupProbe != nil {
+			corev1.SetDefaults_Probe(a.EphemeralContainerCommon.StartupProbe)
+			if a.EphemeralContainerCommon.StartupProbe.Handler.HTTPGet != nil {
+				corev1.SetDefaults_HTTPGetAction(a.EphemeralContainerCommon.StartupProbe.Handler.HTTPGet)
+			}
+		}
+		if a.EphemeralContainerCommon.Lifecycle != nil {
+			if a.EphemeralContainerCommon.Lifecycle.PostStart != nil {
+				if a.EphemeralContainerCommon.Lifecycle.PostStart.HTTPGet != nil {
+					corev1.SetDefaults_HTTPGetAction(a.EphemeralContainerCommon.Lifecycle.PostStart.HTTPGet)
+				}
+			}
+			if a.EphemeralContainerCommon.Lifecycle.PreStop != nil {
+				if a.EphemeralContainerCommon.Lifecycle.PreStop.HTTPGet != nil {
+					corev1.SetDefaults_HTTPGetAction(a.EphemeralContainerCommon.Lifecycle.PreStop.HTTPGet)
+				}
+			}
 		}
 	}
+	corev1.SetDefaults_ResourceList(&in.Spec.Template.Spec.Overhead)
 }
 
 func SetObjectDefaults_JobList(in *v1.JobList) {

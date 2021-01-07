@@ -26,8 +26,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/apis/apps"
 	api "k8s.io/kubernetes/pkg/apis/core"
+	corevalidation "k8s.io/kubernetes/pkg/apis/core/validation"
+	"k8s.io/kubernetes/pkg/features"
 )
 
 func TestValidateStatefulSet(t *testing.T) {
@@ -1549,7 +1553,7 @@ func TestValidateDaemonSetUpdate(t *testing.T) {
 		if len(successCase.old.ObjectMeta.ResourceVersion) == 0 || len(successCase.update.ObjectMeta.ResourceVersion) == 0 {
 			t.Errorf("%q has incorrect test setup with no resource version set", testName)
 		}
-		if errs := ValidateDaemonSetUpdate(&successCase.update, &successCase.old); len(errs) != 0 {
+		if errs := ValidateDaemonSetUpdate(&successCase.update, &successCase.old, corevalidation.PodValidationOptions{}); len(errs) != 0 {
 			t.Errorf("%q expected no error, but got: %v", testName, errs)
 		}
 	}
@@ -1767,7 +1771,7 @@ func TestValidateDaemonSetUpdate(t *testing.T) {
 			t.Errorf("%q has incorrect test setup with no resource version set", testName)
 		}
 		// Run the tests
-		if errs := ValidateDaemonSetUpdate(&errorCase.update, &errorCase.old); len(errs) != errorCase.expectedErrNum {
+		if errs := ValidateDaemonSetUpdate(&errorCase.update, &errorCase.old, corevalidation.PodValidationOptions{}); len(errs) != errorCase.expectedErrNum {
 			t.Errorf("%q expected %d errors, but got %d error: %v", testName, errorCase.expectedErrNum, len(errs), errs)
 		} else {
 			t.Logf("(PASS) %q got errors %v", testName, errs)
@@ -1776,6 +1780,8 @@ func TestValidateDaemonSetUpdate(t *testing.T) {
 }
 
 func TestValidateDaemonSet(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EphemeralContainers, true)()
+
 	validSelector := map[string]string{"a": "b"}
 	validPodTemplate := api.PodTemplate{
 		Template: api.PodTemplateSpec{
@@ -1824,7 +1830,7 @@ func TestValidateDaemonSet(t *testing.T) {
 		},
 	}
 	for _, successCase := range successCases {
-		if errs := ValidateDaemonSet(&successCase); len(errs) != 0 {
+		if errs := ValidateDaemonSet(&successCase, corevalidation.PodValidationOptions{}); len(errs) != 0 {
 			t.Errorf("expected success: %v", errs)
 		}
 	}
@@ -1946,9 +1952,29 @@ func TestValidateDaemonSet(t *testing.T) {
 				},
 			},
 		},
+		"template may not contain ephemeral containers": {
+			ObjectMeta: metav1.ObjectMeta{Name: "abc", Namespace: metav1.NamespaceDefault},
+			Spec: apps.DaemonSetSpec{
+				Selector: &metav1.LabelSelector{MatchLabels: validSelector},
+				Template: api.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{
+						Labels: validSelector,
+					},
+					Spec: api.PodSpec{
+						RestartPolicy:       api.RestartPolicyAlways,
+						DNSPolicy:           api.DNSClusterFirst,
+						Containers:          []api.Container{{Name: "abc", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: api.TerminationMessageReadFile}},
+						EphemeralContainers: []api.EphemeralContainer{{EphemeralContainerCommon: api.EphemeralContainerCommon{Name: "debug", Image: "image", ImagePullPolicy: "IfNotPresent", TerminationMessagePolicy: "File"}}},
+					},
+				},
+				UpdateStrategy: apps.DaemonSetUpdateStrategy{
+					Type: apps.OnDeleteDaemonSetStrategyType,
+				},
+			},
+		},
 	}
 	for k, v := range errorCases {
-		errs := ValidateDaemonSet(&v)
+		errs := ValidateDaemonSet(&v, corevalidation.PodValidationOptions{})
 		if len(errs) == 0 {
 			t.Errorf("expected failure for %s", k)
 		}
@@ -2018,11 +2044,13 @@ func validDeployment() *apps.Deployment {
 }
 
 func TestValidateDeployment(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.EphemeralContainers, true)()
+
 	successCases := []*apps.Deployment{
 		validDeployment(),
 	}
 	for _, successCase := range successCases {
-		if errs := ValidateDeployment(successCase); len(errs) != 0 {
+		if errs := ValidateDeployment(successCase, corevalidation.PodValidationOptions{}); len(errs) != 0 {
 			t.Errorf("expected success: %v", errs)
 		}
 	}
@@ -2103,8 +2131,19 @@ func TestValidateDeployment(t *testing.T) {
 	invalidProgressDeadlineDeployment.Spec.MinReadySeconds = seconds
 	errorCases["must be greater than minReadySeconds"] = invalidProgressDeadlineDeployment
 
+	// Must not have ephemeral containers
+	invalidEphemeralContainersDeployment := validDeployment()
+	invalidEphemeralContainersDeployment.Spec.Template.Spec.EphemeralContainers = []api.EphemeralContainer{{
+		EphemeralContainerCommon: api.EphemeralContainerCommon{
+			Name:                     "ec",
+			Image:                    "image",
+			ImagePullPolicy:          "IfNotPresent",
+			TerminationMessagePolicy: "File"},
+	}}
+	errorCases["ephemeral containers not allowed"] = invalidEphemeralContainersDeployment
+
 	for k, v := range errorCases {
-		errs := ValidateDeployment(v)
+		errs := ValidateDeployment(v, corevalidation.PodValidationOptions{})
 		if len(errs) == 0 {
 			t.Errorf("[%s] expected failure", k)
 		} else if !strings.Contains(errs[0].Error(), k) {
@@ -2633,7 +2672,7 @@ func TestValidateReplicaSetUpdate(t *testing.T) {
 	for _, successCase := range successCases {
 		successCase.old.ObjectMeta.ResourceVersion = "1"
 		successCase.update.ObjectMeta.ResourceVersion = "1"
-		if errs := ValidateReplicaSetUpdate(&successCase.update, &successCase.old); len(errs) != 0 {
+		if errs := ValidateReplicaSetUpdate(&successCase.update, &successCase.old, corevalidation.PodValidationOptions{}); len(errs) != 0 {
 			t.Errorf("expected success: %v", errs)
 		}
 	}
@@ -2708,7 +2747,7 @@ func TestValidateReplicaSetUpdate(t *testing.T) {
 		},
 	}
 	for testName, errorCase := range errorCases {
-		if errs := ValidateReplicaSetUpdate(&errorCase.update, &errorCase.old); len(errs) == 0 {
+		if errs := ValidateReplicaSetUpdate(&errorCase.update, &errorCase.old, corevalidation.PodValidationOptions{}); len(errs) == 0 {
 			t.Errorf("expected failure: %s", testName)
 		}
 	}
@@ -2778,7 +2817,7 @@ func TestValidateReplicaSet(t *testing.T) {
 		},
 	}
 	for _, successCase := range successCases {
-		if errs := ValidateReplicaSet(&successCase); len(errs) != 0 {
+		if errs := ValidateReplicaSet(&successCase, corevalidation.PodValidationOptions{}); len(errs) != 0 {
 			t.Errorf("expected success: %v", errs)
 		}
 	}
@@ -2910,7 +2949,7 @@ func TestValidateReplicaSet(t *testing.T) {
 		},
 	}
 	for k, v := range errorCases {
-		errs := ValidateReplicaSet(&v)
+		errs := ValidateReplicaSet(&v, corevalidation.PodValidationOptions{})
 		if len(errs) == 0 {
 			t.Errorf("expected failure for %s", k)
 		}
@@ -2930,5 +2969,184 @@ func TestValidateReplicaSet(t *testing.T) {
 				t.Errorf("%s: missing prefix for: %v", k, errs[i])
 			}
 		}
+	}
+}
+
+func TestDaemonSetUpdateMaxSurge(t *testing.T) {
+	testCases := map[string]struct {
+		ds          *apps.RollingUpdateDaemonSet
+		enableSurge bool
+		expectError bool
+	}{
+		"invalid: unset": {
+			ds:          &apps.RollingUpdateDaemonSet{},
+			expectError: true,
+		},
+		"invalid: zero percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("0%"),
+			},
+			expectError: true,
+		},
+		"invalid: zero": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromInt(0),
+			},
+			expectError: true,
+		},
+		"valid: one": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromInt(1),
+			},
+		},
+		"valid: one percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("1%"),
+			},
+		},
+		"valid: 100%": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("100%"),
+			},
+		},
+		"invalid: greater than 100%": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("101%"),
+			},
+			expectError: true,
+		},
+
+		"valid: surge and unavailable set": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("1%"),
+				MaxSurge:       intstr.FromString("1%"),
+			},
+		},
+
+		"invalid: surge enabled, unavailable zero percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("0%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+		"invalid: surge enabled, unavailable zero": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromInt(0),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+		"valid: surge enabled, unavailable one": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromInt(1),
+			},
+			enableSurge: true,
+		},
+		"valid: surge enabled, unavailable one percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("1%"),
+			},
+			enableSurge: true,
+		},
+		"valid: surge enabled, unavailable 100%": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("100%"),
+			},
+			enableSurge: true,
+		},
+		"invalid: surge enabled, unavailable greater than 100%": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("101%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+
+		"invalid: surge enabled, surge zero percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxSurge: intstr.FromString("0%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+		"invalid: surge enabled, surge zero": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxSurge: intstr.FromInt(0),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+		"valid: surge enabled, surge one": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxSurge: intstr.FromInt(1),
+			},
+			enableSurge: true,
+		},
+		"valid: surge enabled, surge one percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxSurge: intstr.FromString("1%"),
+			},
+			enableSurge: true,
+		},
+		"valid: surge enabled, surge 100%": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxSurge: intstr.FromString("100%"),
+			},
+			enableSurge: true,
+		},
+		"invalid: surge enabled, surge greater than 100%": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxSurge: intstr.FromString("101%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+
+		"invalid: surge enabled, surge and unavailable set": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("1%"),
+				MaxSurge:       intstr.FromString("1%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+
+		"invalid: surge enabled, surge and unavailable zero percent": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromString("0%"),
+				MaxSurge:       intstr.FromString("0%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+		"invalid: surge enabled, surge and unavailable zero": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromInt(0),
+				MaxSurge:       intstr.FromInt(0),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+		"invalid: surge enabled, surge and unavailable mixed zero": {
+			ds: &apps.RollingUpdateDaemonSet{
+				MaxUnavailable: intstr.FromInt(0),
+				MaxSurge:       intstr.FromString("0%"),
+			},
+			enableSurge: true,
+			expectError: true,
+		},
+	}
+	for tcName, tc := range testCases {
+		t.Run(tcName, func(t *testing.T) {
+			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DaemonSetUpdateSurge, tc.enableSurge)()
+			errs := ValidateRollingUpdateDaemonSet(tc.ds, field.NewPath("spec", "updateStrategy", "rollingUpdate"))
+			if tc.expectError && len(errs) == 0 {
+				t.Errorf("Unexpected success")
+			}
+			if !tc.expectError && len(errs) != 0 {
+				t.Errorf("Unexpected error(s): %v", errs)
+			}
+		})
 	}
 }

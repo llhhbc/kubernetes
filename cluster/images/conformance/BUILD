@@ -13,8 +13,9 @@ container_layer(
     name = "bins",
     directory = "/usr/local/bin",
     files = [
+        "//cluster/images/conformance/go-runner",
         "//cmd/kubectl",
-        "//test/e2e:e2e.test_binary",
+        "//test/e2e:e2e.test",
         "//vendor/github.com/onsi/ginkgo/ginkgo",
     ],
 )
@@ -22,7 +23,7 @@ container_layer(
 multi_arch_container(
     name = "conformance",
     architectures = SERVER_PLATFORMS["linux"],
-    base = "@debian-hyperkube-base-{ARCH}//image",
+    base = "@debian-base-{ARCH}//image",
     cmd = [
         "/bin/bash",
         "-c",
@@ -33,7 +34,7 @@ multi_arch_container(
     docker_push_tags = ["{{STABLE_DOCKER_PUSH_REGISTRY}}/conformance-{ARCH}:{{STABLE_DOCKER_TAG}}"],
     docker_tags = ["{{STABLE_DOCKER_REGISTRY}}/conformance-{ARCH}:{{STABLE_DOCKER_TAG}}"],
     env = {
-        "E2E_FOCUS": "\[Conformance\]",
+        "E2E_FOCUS": "\\[Conformance\\]",
         "E2E_SKIP": "",
         "E2E_PARALLEL": "1",
         "E2E_PROVIDER": "local",
@@ -62,7 +63,10 @@ filegroup(
 
 filegroup(
     name = "all-srcs",
-    srcs = [":package-srcs"],
+    srcs = [
+        ":package-srcs",
+        "//cluster/images/conformance/go-runner:all-srcs",
+    ],
     tags = ["automanaged"],
     visibility = ["//visibility:public"],
 )

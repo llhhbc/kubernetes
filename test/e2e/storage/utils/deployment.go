@@ -18,13 +18,13 @@ package utils
 
 import (
 	"path"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 )
 
 // PatchCSIDeployment modifies the CSI driver deployment:
@@ -49,10 +49,6 @@ import (
 //
 // Driver deployments that are different will have to do the patching
 // without this function, or skip patching entirely.
-//
-// TODO (?): the storage.csi.image.version and storage.csi.image.registry
-// settings are ignored. We could patch the image definitions or deprecate
-// those options.
 func PatchCSIDeployment(f *framework.Framework, o PatchCSIOptions, object interface{}) error {
 	rename := o.OldDriverName != "" && o.NewDriverName != "" &&
 		o.OldDriverName != o.NewDriverName
@@ -94,14 +90,6 @@ func PatchCSIDeployment(f *framework.Framework, o PatchCSIOptions, object interf
 				// Driver name is expected to be the same
 				// as the provisioner here.
 				container.Args = append(container.Args, "--provisioner="+o.NewDriverName)
-			case o.SnapshotterContainerName:
-				// Driver name is expected to be the same
-				// as the snapshotter here.
-				container.Args = append(container.Args, "--snapshotter="+o.NewDriverName)
-			case o.ClusterRegistrarContainerName:
-				if o.PodInfo != nil {
-					container.Args = append(container.Args, "--pod-info-mount="+strconv.FormatBool(*o.PodInfo))
-				}
 			}
 		}
 	}
@@ -110,7 +98,7 @@ func PatchCSIDeployment(f *framework.Framework, o PatchCSIOptions, object interf
 		patchContainers(spec.Containers)
 		patchVolumes(spec.Volumes)
 		if o.NodeName != "" {
-			spec.NodeName = o.NodeName
+			e2epod.SetNodeSelection(spec, e2epod.NodeSelection{Name: o.NodeName})
 		}
 	}
 
@@ -128,6 +116,31 @@ func PatchCSIDeployment(f *framework.Framework, o PatchCSIOptions, object interf
 			// Driver name is expected to be the same
 			// as the provisioner name here.
 			object.Provisioner = o.NewDriverName
+		}
+	case *storagev1.CSIDriver:
+		if o.NewDriverName != "" {
+			object.Name = o.NewDriverName
+		}
+		if o.PodInfo != nil {
+			object.Spec.PodInfoOnMount = o.PodInfo
+		}
+		if o.StorageCapacity != nil {
+			object.Spec.StorageCapacity = o.StorageCapacity
+		}
+		if o.CanAttach != nil {
+			object.Spec.AttachRequired = o.CanAttach
+		}
+		if o.VolumeLifecycleModes != nil {
+			object.Spec.VolumeLifecycleModes = *o.VolumeLifecycleModes
+		}
+		if o.TokenRequests != nil {
+			object.Spec.TokenRequests = o.TokenRequests
+		}
+		if o.RequiresRepublish != nil {
+			object.Spec.RequiresRepublish = o.RequiresRepublish
+		}
+		if o.FSGroupPolicy != nil {
+			object.Spec.FSGroupPolicy = o.FSGroupPolicy
 		}
 	}
 
@@ -158,12 +171,34 @@ type PatchCSIOptions struct {
 	// If non-empty, --snapshotter with new name will be appended
 	// to the argument list.
 	SnapshotterContainerName string
-	// The name of the container which has the cluster-driver-registrar
-	// binary.
-	ClusterRegistrarContainerName string
 	// If non-empty, all pods are forced to run on this node.
 	NodeName string
-	// If not nil, the argument to pass to the cluster-driver-registrar's
-	// pod-info-mount argument.
+	// If not nil, the value to use for the CSIDriver.Spec.PodInfo
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
 	PodInfo *bool
+	// If not nil, the value to use for the CSIDriver.Spec.CanAttach
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
+	CanAttach *bool
+	// If not nil, the value to use for the CSIDriver.Spec.StorageCapacity
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
+	StorageCapacity *bool
+	// If not nil, the value to use for the CSIDriver.Spec.VolumeLifecycleModes
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
+	VolumeLifecycleModes *[]storagev1.VolumeLifecycleMode
+	// If not nil, the value to use for the CSIDriver.Spec.TokenRequests
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
+	TokenRequests []storagev1.TokenRequest
+	// If not nil, the value to use for the CSIDriver.Spec.RequiresRepublish
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
+	RequiresRepublish *bool
+	// If not nil, the value to use for the CSIDriver.Spec.FSGroupPolicy
+	// field *if* the driver deploys a CSIDriver object. Ignored
+	// otherwise.
+	FSGroupPolicy *storagev1.FSGroupPolicy
 }

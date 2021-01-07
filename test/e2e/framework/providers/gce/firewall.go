@@ -75,7 +75,7 @@ func ConstructHealthCheckFirewallForLBService(clusterID string, svc *v1.Service,
 	fw := compute.Firewall{}
 	fw.Name = MakeHealthCheckFirewallNameForLBService(clusterID, cloudprovider.DefaultLoadBalancerName(svc), isNodesHealthCheck)
 	fw.TargetTags = []string{nodeTag}
-	fw.SourceRanges = gcecloud.LoadBalancerSrcRanges()
+	fw.SourceRanges = gcecloud.L4LoadBalancerSrcRanges()
 	healthCheckPort := gcecloud.GetNodesHealthCheckPort()
 	if !isNodesHealthCheck {
 		healthCheckPort = svc.Spec.HealthCheckNodePort
@@ -216,7 +216,7 @@ func GetE2eFirewalls(masterName, masterTag, nodeTag, network, clusterIPRange str
 		},
 	})
 	fws = append(fws, &compute.Firewall{
-		Name:         nodeTag + "-" + instancePrefix + "-http-alt",
+		Name:         nodeTag + "-http-alt",
 		SourceRanges: []string{"0.0.0.0/0"},
 		TargetTags:   []string{nodeTag},
 		Allowed: []*compute.FirewallAllowed{
@@ -231,7 +231,7 @@ func GetE2eFirewalls(masterName, masterTag, nodeTag, network, clusterIPRange str
 		},
 	})
 	fws = append(fws, &compute.Firewall{
-		Name:         nodeTag + "-" + instancePrefix + "-nodeports",
+		Name:         nodeTag + "-nodeports",
 		SourceRanges: []string{"0.0.0.0/0"},
 		TargetTags:   []string{nodeTag},
 		Allowed: []*compute.FirewallAllowed{

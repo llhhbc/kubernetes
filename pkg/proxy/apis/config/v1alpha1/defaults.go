@@ -25,8 +25,8 @@ import (
 	kruntime "k8s.io/apimachinery/pkg/runtime"
 	kubeproxyconfigv1alpha1 "k8s.io/kube-proxy/config/v1alpha1"
 
+	"k8s.io/kubernetes/pkg/cluster/ports"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
-	"k8s.io/kubernetes/pkg/master/ports"
 	proxyutil "k8s.io/kubernetes/pkg/proxy/util"
 	"k8s.io/utils/pointer"
 )
@@ -58,11 +58,11 @@ func SetDefaults_KubeProxyConfiguration(obj *kubeproxyconfigv1alpha1.KubeProxyCo
 		temp := int32(qos.KubeProxyOOMScoreAdj)
 		obj.OOMScoreAdj = &temp
 	}
-	if obj.ResourceContainer == "" {
-		obj.ResourceContainer = "/kube-proxy"
-	}
 	if obj.IPTables.SyncPeriod.Duration == 0 {
 		obj.IPTables.SyncPeriod = metav1.Duration{Duration: 30 * time.Second}
+	}
+	if obj.IPTables.MinSyncPeriod.Duration == 0 {
+		obj.IPTables.MinSyncPeriod = metav1.Duration{Duration: 1 * time.Second}
 	}
 	if obj.IPVS.SyncPeriod.Duration == 0 {
 		obj.IPVS.SyncPeriod = metav1.Duration{Duration: 30 * time.Second}
@@ -71,16 +71,14 @@ func SetDefaults_KubeProxyConfiguration(obj *kubeproxyconfigv1alpha1.KubeProxyCo
 	if obj.UDPIdleTimeout == zero {
 		obj.UDPIdleTimeout = metav1.Duration{Duration: 250 * time.Millisecond}
 	}
-	// If ConntrackMax is set, respect it.
-	if obj.Conntrack.Max == nil {
-		// If ConntrackMax is *not* set, use per-core scaling.
-		if obj.Conntrack.MaxPerCore == nil {
-			obj.Conntrack.MaxPerCore = pointer.Int32Ptr(32 * 1024)
-		}
-		if obj.Conntrack.Min == nil {
-			obj.Conntrack.Min = pointer.Int32Ptr(128 * 1024)
-		}
+
+	if obj.Conntrack.MaxPerCore == nil {
+		obj.Conntrack.MaxPerCore = pointer.Int32Ptr(32 * 1024)
 	}
+	if obj.Conntrack.Min == nil {
+		obj.Conntrack.Min = pointer.Int32Ptr(128 * 1024)
+	}
+
 	if obj.IPTables.MasqueradeBit == nil {
 		temp := int32(14)
 		obj.IPTables.MasqueradeBit = &temp

@@ -23,8 +23,8 @@ import (
 
 // NOTE(claudiub): These constants should NOT be used as Pod Container Images.
 const (
-	NginxImageName = "nginx"
-	RedisImageName = "redis"
+	WebserverImageName = "httpd"
+	AgnhostImageName   = "agnhost"
 )
 
 var (
@@ -40,12 +40,12 @@ var (
 	// KittenImage is the fully qualified URI to the Kitten image
 	KittenImage = imageutils.GetE2EImage(imageutils.Kitten)
 
-	// NginxImage is the fully qualified URI to the Nginx image
-	NginxImage = imageutils.GetE2EImage(imageutils.Nginx)
+	// WebserverImage is the fully qualified URI to the Httpd image
+	WebserverImage = imageutils.GetE2EImage(imageutils.Httpd)
 
-	// NewNginxImage is the fully qualified URI to the NginxNew image
-	NewNginxImage = imageutils.GetE2EImage(imageutils.NginxNew)
+	// NewWebserverImage is the fully qualified URI to the HttpdNew image
+	NewWebserverImage = imageutils.GetE2EImage(imageutils.HttpdNew)
 
-	// RedisImage is the fully qualified URI to the Redis image
-	RedisImage = imageutils.GetE2EImage(imageutils.Redis)
+	// AgnhostImage is the fully qualified URI to the Agnhost image
+	AgnhostImage = imageutils.GetE2EImage(imageutils.Agnhost)
 )

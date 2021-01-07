@@ -27,7 +27,7 @@ import (
 	"github.com/vmware/govmomi/vim25"
 	"github.com/vmware/govmomi/vim25/mo"
 	"github.com/vmware/govmomi/vim25/types"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 // VirtualMachine extends the govmomi VirtualMachine object
@@ -168,7 +168,6 @@ func (vm *VirtualMachine) AttachDisk(ctx context.Context, vmDiskPath string, vol
 
 // DetachDisk detaches the disk specified by vmDiskPath
 func (vm *VirtualMachine) DetachDisk(ctx context.Context, vmDiskPath string) error {
-	vmDiskPath = RemoveStorageClusterORFolderNameFromVDiskPath(vmDiskPath)
 	device, err := vm.getVirtualDeviceByPath(ctx, vmDiskPath)
 	if err != nil {
 		klog.Errorf("Disk ID not found for VM: %q with diskPath: %q", vm.InventoryPath, vmDiskPath)
@@ -211,6 +210,29 @@ func (vm *VirtualMachine) IsActive(ctx context.Context) (bool, error) {
 		return true, nil
 	}
 
+	return false, nil
+}
+
+// Exists checks if VM exists and is not terminated
+func (vm *VirtualMachine) Exists(ctx context.Context) (bool, error) {
+	vmMoList, err := vm.Datacenter.GetVMMoList(ctx, []*VirtualMachine{vm}, []string{"summary.runtime.powerState"})
+	if err != nil {
+		klog.Errorf("Failed to get VM Managed object with property summary. err: +%v", err)
+		return false, err
+	}
+	// We check for VMs which are still available in vcenter and has not been terminated/removed from
+	// disk and hence we consider PoweredOn,PoweredOff and Suspended as alive states.
+	aliveStates := []types.VirtualMachinePowerState{
+		types.VirtualMachinePowerStatePoweredOff,
+		types.VirtualMachinePowerStatePoweredOn,
+		types.VirtualMachinePowerStateSuspended,
+	}
+	currentState := vmMoList[0].Summary.Runtime.PowerState
+	for _, state := range aliveStates {
+		if state == currentState {
+			return true, nil
+		}
+	}
 	return false, nil
 }
 
@@ -291,7 +313,7 @@ func (vm *VirtualMachine) CreateDiskSpec(ctx context.Context, diskPath string, d
 			if err := vm.deleteController(ctx, newSCSIController, vmDevices); err != nil {
 				return nil, nil, fmt.Errorf("failed to delete SCSI controller after failing to find it on VM: %v", err)
 			}
-			return nil, nil, fmt.Errorf("Cannot find SCSI controller of type: %q in VM", volumeOptions.SCSIControllerType)
+			return nil, nil, fmt.Errorf("cannot find SCSI controller of type: %q in VM", volumeOptions.SCSIControllerType)
 		}
 	}
 	disk := vmDevices.CreateDisk(scsiController, dsObj.Reference(), diskPath)

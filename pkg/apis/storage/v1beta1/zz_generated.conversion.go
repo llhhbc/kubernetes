@@ -28,6 +28,7 @@ import (
 	conversion "k8s.io/apimachinery/pkg/conversion"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	core "k8s.io/kubernetes/pkg/apis/core"
+	corev1 "k8s.io/kubernetes/pkg/apis/core/v1"
 	storage "k8s.io/kubernetes/pkg/apis/storage"
 )
 
@@ -128,6 +129,16 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.TokenRequest)(nil), (*storage.TokenRequest)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_TokenRequest_To_storage_TokenRequest(a.(*v1beta1.TokenRequest), b.(*storage.TokenRequest), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*storage.TokenRequest)(nil), (*v1beta1.TokenRequest)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_storage_TokenRequest_To_v1beta1_TokenRequest(a.(*storage.TokenRequest), b.(*v1beta1.TokenRequest), scope)
+	}); err != nil {
+		return err
+	}
 	if err := s.AddGeneratedConversionFunc((*v1beta1.VolumeAttachment)(nil), (*storage.VolumeAttachment)(nil), func(a, b interface{}, scope conversion.Scope) error {
 		return Convert_v1beta1_VolumeAttachment_To_storage_VolumeAttachment(a.(*v1beta1.VolumeAttachment), b.(*storage.VolumeAttachment), scope)
 	}); err != nil {
@@ -188,6 +199,16 @@ func RegisterConversions(s *runtime.Scheme) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.AddGeneratedConversionFunc((*v1beta1.VolumeNodeResources)(nil), (*storage.VolumeNodeResources)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_v1beta1_VolumeNodeResources_To_storage_VolumeNodeResources(a.(*v1beta1.VolumeNodeResources), b.(*storage.VolumeNodeResources), scope)
+	}); err != nil {
+		return err
+	}
+	if err := s.AddGeneratedConversionFunc((*storage.VolumeNodeResources)(nil), (*v1beta1.VolumeNodeResources)(nil), func(a, b interface{}, scope conversion.Scope) error {
+		return Convert_storage_VolumeNodeResources_To_v1beta1_VolumeNodeResources(a.(*storage.VolumeNodeResources), b.(*v1beta1.VolumeNodeResources), scope)
+	}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -219,7 +240,17 @@ func Convert_storage_CSIDriver_To_v1beta1_CSIDriver(in *storage.CSIDriver, out *
 
 func autoConvert_v1beta1_CSIDriverList_To_storage_CSIDriverList(in *v1beta1.CSIDriverList, out *storage.CSIDriverList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]storage.CSIDriver)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]storage.CSIDriver, len(*in))
+		for i := range *in {
+			if err := Convert_v1beta1_CSIDriver_To_storage_CSIDriver(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -230,7 +261,17 @@ func Convert_v1beta1_CSIDriverList_To_storage_CSIDriverList(in *v1beta1.CSIDrive
 
 func autoConvert_storage_CSIDriverList_To_v1beta1_CSIDriverList(in *storage.CSIDriverList, out *v1beta1.CSIDriverList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1beta1.CSIDriver)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]v1beta1.CSIDriver, len(*in))
+		for i := range *in {
+			if err := Convert_storage_CSIDriver_To_v1beta1_CSIDriver(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -242,6 +283,11 @@ func Convert_storage_CSIDriverList_To_v1beta1_CSIDriverList(in *storage.CSIDrive
 func autoConvert_v1beta1_CSIDriverSpec_To_storage_CSIDriverSpec(in *v1beta1.CSIDriverSpec, out *storage.CSIDriverSpec, s conversion.Scope) error {
 	out.AttachRequired = (*bool)(unsafe.Pointer(in.AttachRequired))
 	out.PodInfoOnMount = (*bool)(unsafe.Pointer(in.PodInfoOnMount))
+	out.VolumeLifecycleModes = *(*[]storage.VolumeLifecycleMode)(unsafe.Pointer(&in.VolumeLifecycleModes))
+	out.StorageCapacity = (*bool)(unsafe.Pointer(in.StorageCapacity))
+	out.FSGroupPolicy = (*storage.FSGroupPolicy)(unsafe.Pointer(in.FSGroupPolicy))
+	out.TokenRequests = *(*[]storage.TokenRequest)(unsafe.Pointer(&in.TokenRequests))
+	out.RequiresRepublish = (*bool)(unsafe.Pointer(in.RequiresRepublish))
 	return nil
 }
 
@@ -252,7 +298,12 @@ func Convert_v1beta1_CSIDriverSpec_To_storage_CSIDriverSpec(in *v1beta1.CSIDrive
 
 func autoConvert_storage_CSIDriverSpec_To_v1beta1_CSIDriverSpec(in *storage.CSIDriverSpec, out *v1beta1.CSIDriverSpec, s conversion.Scope) error {
 	out.AttachRequired = (*bool)(unsafe.Pointer(in.AttachRequired))
+	out.FSGroupPolicy = (*v1beta1.FSGroupPolicy)(unsafe.Pointer(in.FSGroupPolicy))
 	out.PodInfoOnMount = (*bool)(unsafe.Pointer(in.PodInfoOnMount))
+	out.VolumeLifecycleModes = *(*[]v1beta1.VolumeLifecycleMode)(unsafe.Pointer(&in.VolumeLifecycleModes))
+	out.StorageCapacity = (*bool)(unsafe.Pointer(in.StorageCapacity))
+	out.TokenRequests = *(*[]v1beta1.TokenRequest)(unsafe.Pointer(&in.TokenRequests))
+	out.RequiresRepublish = (*bool)(unsafe.Pointer(in.RequiresRepublish))
 	return nil
 }
 
@@ -291,6 +342,7 @@ func autoConvert_v1beta1_CSINodeDriver_To_storage_CSINodeDriver(in *v1beta1.CSIN
 	out.Name = in.Name
 	out.NodeID = in.NodeID
 	out.TopologyKeys = *(*[]string)(unsafe.Pointer(&in.TopologyKeys))
+	out.Allocatable = (*storage.VolumeNodeResources)(unsafe.Pointer(in.Allocatable))
 	return nil
 }
 
@@ -303,6 +355,7 @@ func autoConvert_storage_CSINodeDriver_To_v1beta1_CSINodeDriver(in *storage.CSIN
 	out.Name = in.Name
 	out.NodeID = in.NodeID
 	out.TopologyKeys = *(*[]string)(unsafe.Pointer(&in.TopologyKeys))
+	out.Allocatable = (*v1beta1.VolumeNodeResources)(unsafe.Pointer(in.Allocatable))
 	return nil
 }
 
@@ -409,6 +462,28 @@ func Convert_storage_StorageClassList_To_v1beta1_StorageClassList(in *storage.St
 	return autoConvert_storage_StorageClassList_To_v1beta1_StorageClassList(in, out, s)
 }
 
+func autoConvert_v1beta1_TokenRequest_To_storage_TokenRequest(in *v1beta1.TokenRequest, out *storage.TokenRequest, s conversion.Scope) error {
+	out.Audience = in.Audience
+	out.ExpirationSeconds = (*int64)(unsafe.Pointer(in.ExpirationSeconds))
+	return nil
+}
+
+// Convert_v1beta1_TokenRequest_To_storage_TokenRequest is an autogenerated conversion function.
+func Convert_v1beta1_TokenRequest_To_storage_TokenRequest(in *v1beta1.TokenRequest, out *storage.TokenRequest, s conversion.Scope) error {
+	return autoConvert_v1beta1_TokenRequest_To_storage_TokenRequest(in, out, s)
+}
+
+func autoConvert_storage_TokenRequest_To_v1beta1_TokenRequest(in *storage.TokenRequest, out *v1beta1.TokenRequest, s conversion.Scope) error {
+	out.Audience = in.Audience
+	out.ExpirationSeconds = (*int64)(unsafe.Pointer(in.ExpirationSeconds))
+	return nil
+}
+
+// Convert_storage_TokenRequest_To_v1beta1_TokenRequest is an autogenerated conversion function.
+func Convert_storage_TokenRequest_To_v1beta1_TokenRequest(in *storage.TokenRequest, out *v1beta1.TokenRequest, s conversion.Scope) error {
+	return autoConvert_storage_TokenRequest_To_v1beta1_TokenRequest(in, out, s)
+}
+
 func autoConvert_v1beta1_VolumeAttachment_To_storage_VolumeAttachment(in *v1beta1.VolumeAttachment, out *storage.VolumeAttachment, s conversion.Scope) error {
 	out.ObjectMeta = in.ObjectMeta
 	if err := Convert_v1beta1_VolumeAttachmentSpec_To_storage_VolumeAttachmentSpec(&in.Spec, &out.Spec, s); err != nil {
@@ -443,7 +518,17 @@ func Convert_storage_VolumeAttachment_To_v1beta1_VolumeAttachment(in *storage.Vo
 
 func autoConvert_v1beta1_VolumeAttachmentList_To_storage_VolumeAttachmentList(in *v1beta1.VolumeAttachmentList, out *storage.VolumeAttachmentList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]storage.VolumeAttachment)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]storage.VolumeAttachment, len(*in))
+		for i := range *in {
+			if err := Convert_v1beta1_VolumeAttachment_To_storage_VolumeAttachment(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -454,7 +539,17 @@ func Convert_v1beta1_VolumeAttachmentList_To_storage_VolumeAttachmentList(in *v1
 
 func autoConvert_storage_VolumeAttachmentList_To_v1beta1_VolumeAttachmentList(in *storage.VolumeAttachmentList, out *v1beta1.VolumeAttachmentList, s conversion.Scope) error {
 	out.ListMeta = in.ListMeta
-	out.Items = *(*[]v1beta1.VolumeAttachment)(unsafe.Pointer(&in.Items))
+	if in.Items != nil {
+		in, out := &in.Items, &out.Items
+		*out = make([]v1beta1.VolumeAttachment, len(*in))
+		for i := range *in {
+			if err := Convert_storage_VolumeAttachment_To_v1beta1_VolumeAttachment(&(*in)[i], &(*out)[i], s); err != nil {
+				return err
+			}
+		}
+	} else {
+		out.Items = nil
+	}
 	return nil
 }
 
@@ -465,6 +560,15 @@ func Convert_storage_VolumeAttachmentList_To_v1beta1_VolumeAttachmentList(in *st
 
 func autoConvert_v1beta1_VolumeAttachmentSource_To_storage_VolumeAttachmentSource(in *v1beta1.VolumeAttachmentSource, out *storage.VolumeAttachmentSource, s conversion.Scope) error {
 	out.PersistentVolumeName = (*string)(unsafe.Pointer(in.PersistentVolumeName))
+	if in.InlineVolumeSpec != nil {
+		in, out := &in.InlineVolumeSpec, &out.InlineVolumeSpec
+		*out = new(core.PersistentVolumeSpec)
+		if err := corev1.Convert_v1_PersistentVolumeSpec_To_core_PersistentVolumeSpec(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.InlineVolumeSpec = nil
+	}
 	return nil
 }
 
@@ -475,6 +579,15 @@ func Convert_v1beta1_VolumeAttachmentSource_To_storage_VolumeAttachmentSource(in
 
 func autoConvert_storage_VolumeAttachmentSource_To_v1beta1_VolumeAttachmentSource(in *storage.VolumeAttachmentSource, out *v1beta1.VolumeAttachmentSource, s conversion.Scope) error {
 	out.PersistentVolumeName = (*string)(unsafe.Pointer(in.PersistentVolumeName))
+	if in.InlineVolumeSpec != nil {
+		in, out := &in.InlineVolumeSpec, &out.InlineVolumeSpec
+		*out = new(v1.PersistentVolumeSpec)
+		if err := corev1.Convert_core_PersistentVolumeSpec_To_v1_PersistentVolumeSpec(*in, *out, s); err != nil {
+			return err
+		}
+	} else {
+		out.InlineVolumeSpec = nil
+	}
 	return nil
 }
 
@@ -557,4 +670,24 @@ func autoConvert_storage_VolumeError_To_v1beta1_VolumeError(in *storage.VolumeEr
 // Convert_storage_VolumeError_To_v1beta1_VolumeError is an autogenerated conversion function.
 func Convert_storage_VolumeError_To_v1beta1_VolumeError(in *storage.VolumeError, out *v1beta1.VolumeError, s conversion.Scope) error {
 	return autoConvert_storage_VolumeError_To_v1beta1_VolumeError(in, out, s)
+}
+
+func autoConvert_v1beta1_VolumeNodeResources_To_storage_VolumeNodeResources(in *v1beta1.VolumeNodeResources, out *storage.VolumeNodeResources, s conversion.Scope) error {
+	out.Count = (*int32)(unsafe.Pointer(in.Count))
+	return nil
+}
+
+// Convert_v1beta1_VolumeNodeResources_To_storage_VolumeNodeResources is an autogenerated conversion function.
+func Convert_v1beta1_VolumeNodeResources_To_storage_VolumeNodeResources(in *v1beta1.VolumeNodeResources, out *storage.VolumeNodeResources, s conversion.Scope) error {
+	return autoConvert_v1beta1_VolumeNodeResources_To_storage_VolumeNodeResources(in, out, s)
+}
+
+func autoConvert_storage_VolumeNodeResources_To_v1beta1_VolumeNodeResources(in *storage.VolumeNodeResources, out *v1beta1.VolumeNodeResources, s conversion.Scope) error {
+	out.Count = (*int32)(unsafe.Pointer(in.Count))
+	return nil
+}
+
+// Convert_storage_VolumeNodeResources_To_v1beta1_VolumeNodeResources is an autogenerated conversion function.
+func Convert_storage_VolumeNodeResources_To_v1beta1_VolumeNodeResources(in *storage.VolumeNodeResources, out *v1beta1.VolumeNodeResources, s conversion.Scope) error {
+	return autoConvert_storage_VolumeNodeResources_To_v1beta1_VolumeNodeResources(in, out, s)
 }

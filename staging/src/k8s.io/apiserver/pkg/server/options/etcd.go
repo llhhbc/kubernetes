@@ -31,9 +31,11 @@ import (
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
 	"k8s.io/apiserver/pkg/server"
 	"k8s.io/apiserver/pkg/server/healthz"
+	"k8s.io/apiserver/pkg/server/options/encryptionconfig"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
 	"k8s.io/apiserver/pkg/storage/storagebackend"
 	storagefactory "k8s.io/apiserver/pkg/storage/storagebackend/factory"
+	"k8s.io/klog/v2"
 )
 
 type EtcdOptions struct {
@@ -160,7 +162,7 @@ func (s *EtcdOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.StorageConfig.Transport.CertFile, "etcd-certfile", s.StorageConfig.Transport.CertFile,
 		"SSL certification file used to secure etcd communication.")
 
-	fs.StringVar(&s.StorageConfig.Transport.CAFile, "etcd-cafile", s.StorageConfig.Transport.CAFile,
+	fs.StringVar(&s.StorageConfig.Transport.TrustedCAFile, "etcd-cafile", s.StorageConfig.Transport.TrustedCAFile,
 		"SSL Certificate Authority file used to secure etcd communication.")
 
 	fs.StringVar(&s.EncryptionProviderConfigFilepath, "experimental-encryption-provider-config", s.EncryptionProviderConfigFilepath,
@@ -175,6 +177,15 @@ func (s *EtcdOptions) AddFlags(fs *pflag.FlagSet) {
 
 	fs.DurationVar(&s.StorageConfig.CountMetricPollPeriod, "etcd-count-metric-poll-period", s.StorageConfig.CountMetricPollPeriod, ""+
 		"Frequency of polling etcd for number of resources per type. 0 disables the metric collection.")
+
+	fs.DurationVar(&s.StorageConfig.DBMetricPollInterval, "etcd-db-metric-poll-interval", s.StorageConfig.DBMetricPollInterval,
+		"The interval of requests to poll etcd and update metric. 0 disables the metric collection")
+
+	fs.DurationVar(&s.StorageConfig.HealthcheckTimeout, "etcd-healthcheck-timeout", s.StorageConfig.HealthcheckTimeout,
+		"The timeout to use when checking etcd health.")
+
+	fs.Int64Var(&s.StorageConfig.LeaseReuseDurationSeconds, "lease-reuse-duration-seconds", s.StorageConfig.LeaseReuseDurationSeconds,
+		"The time in seconds that each lease is reused. A lower value could avoid large number of objects reusing the same lease. Notice that a too small value may cause performance problems at storage layer.")
 }
 
 func (s *EtcdOptions) ApplyTo(c *server.Config) error {
@@ -201,9 +212,18 @@ func (s *EtcdOptions) addEtcdHealthEndpoint(c *server.Config) error {
 	if err != nil {
 		return err
 	}
-	c.HealthzChecks = append(c.HealthzChecks, healthz.NamedCheck("etcd", func(r *http.Request) error {
+	c.AddHealthChecks(healthz.NamedCheck("etcd", func(r *http.Request) error {
 		return healthCheck()
 	}))
+
+	if s.EncryptionProviderConfigFilepath != "" {
+		kmsPluginHealthzChecks, err := encryptionconfig.GetKMSPluginHealthzCheckers(s.EncryptionProviderConfigFilepath)
+		if err != nil {
+			return err
+		}
+		c.AddHealthChecks(kmsPluginHealthzChecks...)
+	}
+
 	return nil
 }
 
@@ -225,12 +245,15 @@ func (f *SimpleRestOptionsFactory) GetRESTOptions(resource schema.GroupResource)
 		if err != nil {
 			return generic.RESTOptions{}, err
 		}
-		cacheSize, ok := sizes[resource]
-		if !ok {
-			cacheSize = f.Options.DefaultWatchCacheSize
+		size, ok := sizes[resource]
+		if ok && size > 0 {
+			klog.Warningf("Dropping watch-cache-size for %v - watchCache size is now dynamic", resource)
 		}
-		// depending on cache size this might return an undecorated storage
-		ret.Decorator = genericregistry.StorageWithCacher(cacheSize)
+		if ok && size <= 0 {
+			ret.Decorator = generic.UndecoratedStorage
+		} else {
+			ret.Decorator = genericregistry.StorageWithCacher()
+		}
 	}
 	return ret, nil
 }
@@ -259,12 +282,15 @@ func (f *StorageFactoryRestOptionsFactory) GetRESTOptions(resource schema.GroupR
 		if err != nil {
 			return generic.RESTOptions{}, err
 		}
-		cacheSize, ok := sizes[resource]
-		if !ok {
-			cacheSize = f.Options.DefaultWatchCacheSize
+		size, ok := sizes[resource]
+		if ok && size > 0 {
+			klog.Warningf("Dropping watch-cache-size for %v - watchCache size is now dynamic", resource)
 		}
-		// depending on cache size this might return an undecorated storage
-		ret.Decorator = genericregistry.StorageWithCacher(cacheSize)
+		if ok && size <= 0 {
+			ret.Decorator = generic.UndecoratedStorage
+		} else {
+			ret.Decorator = genericregistry.StorageWithCacher()
+		}
 	}
 
 	return ret, nil

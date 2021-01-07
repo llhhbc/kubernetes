@@ -25,15 +25,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	policy "k8s.io/api/policy/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/diff"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	k8s_api_v1 "k8s.io/kubernetes/pkg/apis/core/v1"
+	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/security/apparmor"
 	"k8s.io/kubernetes/pkg/security/podsecuritypolicy/seccomp"
 	psputil "k8s.io/kubernetes/pkg/security/podsecuritypolicy/util"
+	"k8s.io/kubernetes/plugin/pkg/admission/serviceaccount"
 	"k8s.io/utils/pointer"
 )
 
@@ -172,6 +176,8 @@ func TestMutateContainerNonmutating(t *testing.T) {
 }
 
 func TestValidatePodFailures(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CSIInlineVolume, true)()
+
 	failHostNetworkPod := defaultPod()
 	failHostNetworkPod.Spec.SecurityContext.HostNetwork = true
 
@@ -328,6 +334,30 @@ func TestValidatePodFailures(t *testing.T) {
 		},
 	}
 
+	failCSIDriverPod := defaultPod()
+	failCSIDriverPod.Spec.Volumes = []api.Volume{
+		{
+			Name: "csi volume pod",
+			VolumeSource: api.VolumeSource{
+				CSI: &api.CSIVolumeSource{
+					Driver: "csi.driver.foo",
+				},
+			},
+		},
+	}
+
+	failGenericEphemeralPod := defaultPod()
+	failGenericEphemeralPod.Spec.Volumes = []api.Volume{
+		{
+			Name: "generic ephemeral volume",
+			VolumeSource: api.VolumeSource{
+				Ephemeral: &api.EphemeralVolumeSource{
+					VolumeClaimTemplate: &api.PersistentVolumeClaimTemplate{},
+				},
+			},
+		},
+	}
+
 	errorCases := map[string]struct {
 		pod           *api.Pod
 		psp           *policy.PodSecurityPolicy
@@ -433,6 +463,45 @@ func TestValidatePodFailures(t *testing.T) {
 			psp:           allowFlexVolumesPSP(false, true),
 			expectedError: "Flexvolume driver is not allowed to be used",
 		},
+		"CSI policy using disallowed CDI driver": {
+			pod: failCSIDriverPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.CSI}
+				psp.Spec.AllowedCSIDrivers = []policy.AllowedCSIDriver{{Name: "csi.driver.disallowed"}}
+				return psp
+			}(),
+			expectedError: "Inline CSI driver is not allowed to be used",
+		},
+		"Using inline CSI driver with no policy specified": {
+			pod: failCSIDriverPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.AllowedCSIDrivers = []policy.AllowedCSIDriver{{Name: "csi.driver.foo"}}
+				return psp
+			}(),
+			expectedError: "csi volumes are not allowed to be used",
+		},
+		"policy.All using disallowed CDI driver": {
+			pod: failCSIDriverPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.All}
+				psp.Spec.AllowedCSIDrivers = []policy.AllowedCSIDriver{{Name: "csi.driver.disallowed"}}
+				return psp
+			}(),
+			expectedError: "Inline CSI driver is not allowed to be used",
+		},
+		"CSI inline volumes without proper policy set": {
+			pod:           failCSIDriverPod,
+			psp:           defaultPSP(),
+			expectedError: "csi volumes are not allowed to be used",
+		},
+		"generic ephemeral volumes without proper policy set": {
+			pod:           failGenericEphemeralPod,
+			psp:           defaultPSP(),
+			expectedError: "ephemeral volumes are not allowed to be used",
+		},
 	}
 	for name, test := range errorCases {
 		t.Run(name, func(t *testing.T) {
@@ -495,17 +564,17 @@ func TestValidateContainerFailures(t *testing.T) {
 
 	failNilAppArmorPod := defaultPod()
 	v1FailInvalidAppArmorPod := defaultV1Pod()
-	apparmor.SetProfileName(v1FailInvalidAppArmorPod, defaultContainerName, apparmor.ProfileNamePrefix+"foo")
+	apparmor.SetProfileName(v1FailInvalidAppArmorPod, defaultContainerName, v1.AppArmorBetaProfileNamePrefix+"foo")
 	failInvalidAppArmorPod := &api.Pod{}
 	k8s_api_v1.Convert_v1_Pod_To_core_Pod(v1FailInvalidAppArmorPod, failInvalidAppArmorPod, nil)
 
 	failAppArmorPSP := defaultPSP()
 	failAppArmorPSP.Annotations = map[string]string{
-		apparmor.AllowedProfilesAnnotationKey: apparmor.ProfileRuntimeDefault,
+		v1.AppArmorBetaAllowedProfilesAnnotationKey: v1.AppArmorBetaProfileRuntimeDefault,
 	}
 
 	failPrivPod := defaultPod()
-	var priv bool = true
+	var priv = true
 	failPrivPod.Spec.Containers[0].SecurityContext.Privileged = &priv
 
 	failProcMountPod := defaultPod()
@@ -616,6 +685,8 @@ func TestValidateContainerFailures(t *testing.T) {
 }
 
 func TestValidatePodSuccess(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CSIInlineVolume, true)()
+
 	hostNetworkPSP := defaultPSP()
 	hostNetworkPSP.Spec.HostNetwork = true
 	hostNetworkPod := defaultPod()
@@ -806,6 +877,46 @@ func TestValidatePodSuccess(t *testing.T) {
 		},
 	}
 
+	csiDriverPod := defaultPod()
+	csiDriverPod.Spec.Volumes = []api.Volume{
+		{
+			Name: "csi inline driver",
+			VolumeSource: api.VolumeSource{
+				CSI: &api.CSIVolumeSource{
+					Driver: "foo",
+				},
+			},
+		},
+		{
+			Name: "csi inline driver 2",
+			VolumeSource: api.VolumeSource{
+				CSI: &api.CSIVolumeSource{
+					Driver: "bar",
+				},
+			},
+		},
+		{
+			Name: "csi inline driver 3",
+			VolumeSource: api.VolumeSource{
+				CSI: &api.CSIVolumeSource{
+					Driver: "baz",
+				},
+			},
+		},
+	}
+
+	genericEphemeralPod := defaultPod()
+	genericEphemeralPod.Spec.Volumes = []api.Volume{
+		{
+			Name: "generic ephemeral volume",
+			VolumeSource: api.VolumeSource{
+				Ephemeral: &api.EphemeralVolumeSource{
+					VolumeClaimTemplate: &api.PersistentVolumeClaimTemplate{},
+				},
+			},
+		},
+	}
+
 	successCases := map[string]struct {
 		pod *api.Pod
 		psp *policy.PodSecurityPolicy
@@ -886,6 +997,49 @@ func TestValidatePodSuccess(t *testing.T) {
 			pod: flexVolumePod,
 			psp: allowFlexVolumesPSP(true, false),
 		},
+		"CSI policy with no CSI volumes used": {
+			pod: defaultPod(),
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.CSI}
+				psp.Spec.AllowedCSIDrivers = []policy.AllowedCSIDriver{{Name: "foo"}, {Name: "bar"}, {Name: "baz"}}
+				return psp
+			}(),
+		},
+		"CSI policy with CSI inline volumes used": {
+			pod: csiDriverPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.CSI}
+				psp.Spec.AllowedCSIDrivers = []policy.AllowedCSIDriver{{Name: "foo"}, {Name: "bar"}, {Name: "baz"}}
+				return psp
+			}(),
+		},
+		"policy.All with CSI inline volumes used": {
+			pod: csiDriverPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.All}
+				psp.Spec.AllowedCSIDrivers = []policy.AllowedCSIDriver{{Name: "foo"}, {Name: "bar"}, {Name: "baz"}}
+				return psp
+			}(),
+		},
+		"generic ephemeral volume policy with generic ephemeral volume used": {
+			pod: genericEphemeralPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.Ephemeral}
+				return psp
+			}(),
+		},
+		"policy.All with generic ephemeral volume used": {
+			pod: genericEphemeralPod,
+			psp: func() *policy.PodSecurityPolicy {
+				psp := defaultPSP()
+				psp.Spec.Volumes = []policy.FSType{policy.All}
+				return psp
+			}(),
+		},
 	}
 
 	for name, test := range successCases {
@@ -925,17 +1079,17 @@ func TestValidateContainerSuccess(t *testing.T) {
 
 	appArmorPSP := defaultPSP()
 	appArmorPSP.Annotations = map[string]string{
-		apparmor.AllowedProfilesAnnotationKey: apparmor.ProfileRuntimeDefault,
+		v1.AppArmorBetaAllowedProfilesAnnotationKey: v1.AppArmorBetaProfileRuntimeDefault,
 	}
 	v1AppArmorPod := defaultV1Pod()
-	apparmor.SetProfileName(v1AppArmorPod, defaultContainerName, apparmor.ProfileRuntimeDefault)
+	apparmor.SetProfileName(v1AppArmorPod, defaultContainerName, v1.AppArmorBetaProfileRuntimeDefault)
 	appArmorPod := &api.Pod{}
 	k8s_api_v1.Convert_v1_Pod_To_core_Pod(v1AppArmorPod, appArmorPod, nil)
 
 	privPSP := defaultPSP()
 	privPSP.Spec.Privileged = true
 	privPod := defaultPod()
-	var priv bool = true
+	var priv = true
 	privPod.Spec.Containers[0].SecurityContext.Privileged = &priv
 
 	capsPSP := defaultPSP()
@@ -1167,7 +1321,7 @@ func defaultNamedPSP(name string) *policy.PodSecurityPolicy {
 }
 
 func defaultPod() *api.Pod {
-	var notPriv bool = false
+	var notPriv = false
 	return &api.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{},
@@ -1191,7 +1345,7 @@ func defaultPod() *api.Pod {
 }
 
 func defaultV1Pod() *v1.Pod {
-	var notPriv bool = false
+	var notPriv = false
 	return &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{},
@@ -1218,6 +1372,9 @@ func defaultV1Pod() *v1.Pod {
 // a pod with that type of volume and deny it, accept it explicitly, or accept it with
 // the FSTypeAll wildcard.
 func TestValidateAllowedVolumes(t *testing.T) {
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.CSIInlineVolume, true)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.GenericEphemeralVolume, true)()
+
 	val := reflect.ValueOf(api.VolumeSource{})
 
 	for i := 0; i < val.NumField(); i++ {
@@ -1259,6 +1416,66 @@ func TestValidateAllowedVolumes(t *testing.T) {
 			psp.Spec.Volumes = []policy.FSType{policy.All}
 			errs = provider.ValidatePod(pod)
 			assert.Empty(t, errs, "wildcard volume expected no errors")
+		})
+	}
+}
+
+func TestValidateProjectedVolume(t *testing.T) {
+	pod := defaultPod()
+	psp := defaultPSP()
+	provider, err := NewSimpleProvider(psp, "namespace", NewSimpleStrategyFactory())
+	require.NoError(t, err, "error creating provider")
+
+	tests := []struct {
+		desc                  string
+		allowedFSTypes        []policy.FSType
+		projectedVolumeSource *api.ProjectedVolumeSource
+		wantAllow             bool
+	}{
+		{
+			desc:                  "deny if secret is not allowed",
+			allowedFSTypes:        []policy.FSType{policy.EmptyDir},
+			projectedVolumeSource: serviceaccount.TokenVolumeSource(),
+			wantAllow:             false,
+		},
+		{
+			desc:           "deny if the projected volume has volume source other than the ones in projected volume injected by service account token admission plugin",
+			allowedFSTypes: []policy.FSType{policy.Secret},
+			projectedVolumeSource: &api.ProjectedVolumeSource{
+				Sources: []api.VolumeProjection{
+					{
+						ConfigMap: &api.ConfigMapProjection{
+							LocalObjectReference: api.LocalObjectReference{
+								Name: "foo-ca.crt",
+							},
+							Items: []api.KeyToPath{
+								{
+									Key:  "ca.crt",
+									Path: "ca.crt",
+								},
+							},
+						},
+					},
+				}},
+			wantAllow: false,
+		},
+		{
+			desc:                  "allow if secret is allowed and the projected volume sources equals to the ones injected by service account admission plugin",
+			allowedFSTypes:        []policy.FSType{policy.Secret},
+			projectedVolumeSource: serviceaccount.TokenVolumeSource(),
+			wantAllow:             true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			pod.Spec.Volumes = []api.Volume{{VolumeSource: api.VolumeSource{Projected: test.projectedVolumeSource}}}
+			psp.Spec.Volumes = test.allowedFSTypes
+			errs := provider.ValidatePod(pod)
+			if test.wantAllow {
+				assert.Empty(t, errs, "projected volumes are allowed if secret volumes is allowed and BoundServiceAccountTokenVolume is enabled")
+			} else {
+				assert.Contains(t, errs.ToAggregate().Error(), fmt.Sprintf("projected volumes are not allowed to be used"), "did not find the expected error")
+			}
 		})
 	}
 }

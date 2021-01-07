@@ -28,11 +28,10 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/endpoints/metrics"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 )
-
-var errConnKilled = fmt.Errorf("killing connection/stream because serving request timed out and response had been started")
 
 // WithTimeoutForNonLongRunningRequests times out non-long-running requests after the time given by timeout.
 func WithTimeoutForNonLongRunningRequests(handler http.Handler, longRunning apirequest.LongRunningRequestCheck, timeout time.Duration) http.Handler {
@@ -58,7 +57,7 @@ func WithTimeoutForNonLongRunningRequests(handler http.Handler, longRunning apir
 
 		postTimeoutFn := func() {
 			cancel()
-			metrics.Record(req, requestInfo, metrics.APIServerComponent, "", http.StatusGatewayTimeout, 0, 0)
+			metrics.RecordRequestTermination(req, requestInfo, metrics.APIServerComponent, http.StatusGatewayTimeout)
 		}
 		return req, time.After(timeout), postTimeoutFn, apierrors.NewTimeoutError(fmt.Sprintf("request did not complete within %s", timeout), 0)
 	}
@@ -98,7 +97,8 @@ func (t *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer func() {
 			err := recover()
-			if err != nil {
+			// do not wrap the sentinel ErrAbortHandler panic value
+			if err != nil && err != http.ErrAbortHandler {
 				// Same as stdlib http server code. Manually allocate stack
 				// trace buffer size to prevent excessively large logs
 				const size = 64 << 10
@@ -118,6 +118,23 @@ func (t *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	case <-after:
+		defer func() {
+			// resultCh needs to have a reader, since the function doing
+			// the work needs to send to it. This is defer'd to ensure it runs
+			// ever if the post timeout work itself panics.
+			go func() {
+				res := <-resultCh
+				if res != nil {
+					switch t := res.(type) {
+					case error:
+						utilruntime.HandleError(t)
+					default:
+						utilruntime.HandleError(fmt.Errorf("%v", res))
+					}
+				}
+			}()
+		}()
+
 		postTimeoutFn()
 		tw.timeout(err)
 	}
@@ -227,15 +244,17 @@ func (tw *baseTimeoutWriter) timeout(err *apierrors.StatusError) {
 		// no way to timeout the HTTP request at the point. We have to shutdown
 		// the connection for HTTP1 or reset stream for HTTP2.
 		//
-		// Note from: Brad Fitzpatrick
-		// if the ServeHTTP goroutine panics, that will do the best possible thing for both
-		// HTTP/1 and HTTP/2. In HTTP/1, assuming you're replying with at least HTTP/1.1 and
-		// you've already flushed the headers so it's using HTTP chunking, it'll kill the TCP
-		// connection immediately without a proper 0-byte EOF chunk, so the peer will recognize
-		// the response as bogus. In HTTP/2 the server will just RST_STREAM the stream, leaving
-		// the TCP connection open, but resetting the stream to the peer so it'll have an error,
-		// like the HTTP/1 case.
-		panic(errConnKilled)
+		// Note from the golang's docs:
+		// If ServeHTTP panics, the server (the caller of ServeHTTP) assumes
+		// that the effect of the panic was isolated to the active request.
+		// It recovers the panic, logs a stack trace to the server error log,
+		// and either closes the network connection or sends an HTTP/2
+		// RST_STREAM, depending on the HTTP protocol. To abort a handler so
+		// the client sees an interrupted response but the server doesn't log
+		// an error, panic with the value ErrAbortHandler.
+		//
+		// We are throwing http.ErrAbortHandler deliberately so that a client is notified and to suppress a not helpful stacktrace in the logs
+		panic(http.ErrAbortHandler)
 	}
 }
 

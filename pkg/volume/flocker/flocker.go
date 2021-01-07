@@ -23,14 +23,15 @@ import (
 	"time"
 
 	flockerapi "github.com/clusterhq/flocker-go"
-
-	"k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/klog"
-	"k8s.io/kubernetes/pkg/util/env"
-	"k8s.io/kubernetes/pkg/util/mount"
-	"k8s.io/kubernetes/pkg/volume"
+	"k8s.io/klog/v2"
+	"k8s.io/mount-utils"
 	utilstrings "k8s.io/utils/strings"
+
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/kubernetes/pkg/util/env"
+	"k8s.io/kubernetes/pkg/volume"
+	"k8s.io/kubernetes/pkg/volume/util"
 )
 
 // ProbeVolumePlugins is the primary entrypoint for volume plugins.
@@ -107,11 +108,7 @@ func (p *flockerPlugin) CanSupport(spec *volume.Spec) bool {
 		(spec.Volume != nil && spec.Volume.Flocker != nil)
 }
 
-func (p *flockerPlugin) IsMigratedToCSI() bool {
-	return false
-}
-
-func (p *flockerPlugin) RequiresRemount() bool {
+func (p *flockerPlugin) RequiresRemount(spec *volume.Spec) bool {
 	return false
 }
 
@@ -235,8 +232,8 @@ func (b *flockerVolumeMounter) GetPath() string {
 }
 
 // SetUp bind mounts the disk global mount to the volume path.
-func (b *flockerVolumeMounter) SetUp(fsGroup *int64) error {
-	return b.SetUpAt(b.GetPath(), fsGroup)
+func (b *flockerVolumeMounter) SetUp(mounterArgs volume.MounterArgs) error {
+	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
 // newFlockerClient uses environment variables and pod attributes to return a
@@ -277,7 +274,7 @@ control service:
    need to update the Primary UUID for this volume.
 5. Wait until the Primary UUID was updated or timeout.
 */
-func (b *flockerVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (b *flockerVolumeMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	var err error
 	if b.flockerClient == nil {
 		b.flockerClient, err = b.newFlockerClient()
@@ -336,7 +333,7 @@ func (b *flockerVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 	globalFlockerPath := makeGlobalFlockerPath(datasetUUID)
 	klog.V(4).Infof("attempting to mount %s", dir)
 
-	err = b.mounter.Mount(globalFlockerPath, dir, "", options)
+	err = b.mounter.MountSensitiveWithoutSystemd(globalFlockerPath, dir, "", options, nil)
 	if err != nil {
 		notMnt, mntErr := b.mounter.IsLikelyNotMountPoint(dir)
 		if mntErr != nil {
@@ -365,7 +362,7 @@ func (b *flockerVolumeMounter) SetUpAt(dir string, fsGroup *int64) error {
 	}
 
 	if !b.readOnly {
-		volume.SetVolumeOwnership(b, fsGroup)
+		volume.SetVolumeOwnership(b, mounterArgs.FsGroup, mounterArgs.FSGroupChangePolicy, util.FSGroupCompleteHook(b.plugin, nil))
 	}
 
 	klog.V(4).Infof("successfully mounted %s", dir)
@@ -398,7 +395,6 @@ func (b *flockerVolumeMounter) updateDatasetPrimary(datasetUUID string, primaryU
 				datasetUUID, primaryUUID, err,
 			)
 		case <-tickChan.C:
-			break
 		}
 	}
 

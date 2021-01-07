@@ -16,7 +16,10 @@ limitations under the License.
 
 package scheduling
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/kubernetes/pkg/apis/core"
+)
 
 const (
 	// DefaultPriorityWhenNoDefaultClassExists is used to set priority of pods
@@ -44,7 +47,7 @@ const (
 // integer value. The value can be any valid integer.
 type PriorityClass struct {
 	metav1.TypeMeta
-	// Standard object metadata; More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#metadata.
+	// Standard object metadata; More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata.
 	// +optional
 	metav1.ObjectMeta
 
@@ -64,6 +67,11 @@ type PriorityClass struct {
 	// when this priority class should be used.
 	// +optional
 	Description string
+
+	// PreemptionPolicy it the Policy for preempting pods with lower priority.
+	// This field is beta-level.
+	// +optional
+	PreemptionPolicy *core.PreemptionPolicy
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -72,7 +80,7 @@ type PriorityClass struct {
 type PriorityClassList struct {
 	metav1.TypeMeta
 	// Standard list metadata.
-	// More info: https://git.k8s.io/community/contributors/devel/api-conventions.md#types-kinds
+	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
 	// +optional
 	metav1.ListMeta
 

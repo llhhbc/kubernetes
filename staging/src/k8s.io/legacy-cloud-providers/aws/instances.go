@@ -1,3 +1,5 @@
+// +build !providerless
+
 /*
 Copyright 2017 The Kubernetes Authors.
 
@@ -26,7 +28,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	"k8s.io/api/core/v1"
 )
@@ -158,7 +160,7 @@ func (c *instanceCache) describeAllInstancesUncached() (*allInstancesSnapshot, e
 
 	klog.V(4).Infof("EC2 DescribeInstances - fetching all instances")
 
-	filters := []*ec2.Filter{}
+	var filters []*ec2.Filter
 	instances, err := c.cloud.describeInstances(filters)
 	if err != nil {
 		return nil, err

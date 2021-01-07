@@ -2,24 +2,23 @@
 
 module k8s.io/cri-api
 
-go 1.12
+go 1.15
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/gogo/protobuf v0.0.0-20171007142547-342cbe0a0415
-	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b // indirect
-	github.com/golang/protobuf v1.2.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/stretchr/testify v1.2.2
-	golang.org/x/net v0.0.0-20190206173232-65e2d4e15006
-	golang.org/x/sync v0.0.0-20181221193216-37e7f081c4d4 // indirect
-	golang.org/x/text v0.3.1-0.20181227161524-e6919f6577db // indirect
-	google.golang.org/genproto v0.0.0-20170731182057-09f6ed296fc6 // indirect
-	google.golang.org/grpc v1.13.0
+	github.com/gogo/protobuf v1.3.1
+	github.com/golang/protobuf v1.4.3 // indirect
+	github.com/google/go-cmp v0.5.2 // indirect
+	github.com/kr/pretty v0.2.0 // indirect
+	github.com/stretchr/testify v1.6.1
+	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
+	golang.org/x/sys v0.0.0-20201112073958-5cba982894dd // indirect
+	golang.org/x/text v0.3.4 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+	google.golang.org/genproto v0.0.0-20201110150050-8816d57aaa9a // indirect
+	google.golang.org/grpc v1.27.1
+	google.golang.org/protobuf v1.25.0 // indirect
+	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 )
 
-replace (
-	golang.org/x/sync => golang.org/x/sync v0.0.0-20181108010431-42b317875d0f
-	golang.org/x/tools => golang.org/x/tools v0.0.0-20190313210603-aa82965741a9
-	k8s.io/cri-api => ../cri-api
-)
+replace k8s.io/cri-api => ../cri-api

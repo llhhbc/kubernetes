@@ -39,8 +39,7 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	"k8s.io/kubernetes/cmd/kubeadm/app/features"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
-	apivalidation "k8s.io/kubernetes/pkg/apis/core/validation"
-	"k8s.io/kubernetes/pkg/registry/core/service/ipallocator"
+	utilnet "k8s.io/utils/net"
 )
 
 // ValidateInitConfiguration validates an InitConfiguration object and collects all encountered errors
@@ -49,6 +48,7 @@ func ValidateInitConfiguration(c *kubeadm.InitConfiguration) field.ErrorList {
 	allErrs = append(allErrs, ValidateNodeRegistrationOptions(&c.NodeRegistration, field.NewPath("nodeRegistration"))...)
 	allErrs = append(allErrs, ValidateBootstrapTokens(c.BootstrapTokens, field.NewPath("bootstrapTokens"))...)
 	allErrs = append(allErrs, ValidateClusterConfiguration(&c.ClusterConfiguration)...)
+	// TODO(Arvinderpal): update advertiseAddress validation for dual-stack once it's implemented.
 	allErrs = append(allErrs, ValidateAPIEndpoint(&c.LocalAPIEndpoint, field.NewPath("localAPIEndpoint"))...)
 	// TODO: Maybe validate that .CertificateKey is a valid hex encoded AES key
 	return allErrs
@@ -57,13 +57,13 @@ func ValidateInitConfiguration(c *kubeadm.InitConfiguration) field.ErrorList {
 // ValidateClusterConfiguration validates an ClusterConfiguration object and collects all encountered errors
 func ValidateClusterConfiguration(c *kubeadm.ClusterConfiguration) field.ErrorList {
 	allErrs := field.ErrorList{}
-	allErrs = append(allErrs, ValidateNetworking(&c.Networking, field.NewPath("networking"))...)
+	allErrs = append(allErrs, ValidateNetworking(c, field.NewPath("networking"))...)
 	allErrs = append(allErrs, ValidateAPIServer(&c.APIServer, field.NewPath("apiServer"))...)
 	allErrs = append(allErrs, ValidateAbsolutePath(c.CertificatesDir, field.NewPath("certificatesDir"))...)
 	allErrs = append(allErrs, ValidateFeatureGates(c.FeatureGates, field.NewPath("featureGates"))...)
 	allErrs = append(allErrs, ValidateHostPort(c.ControlPlaneEndpoint, field.NewPath("controlPlaneEndpoint"))...)
 	allErrs = append(allErrs, ValidateEtcd(&c.Etcd, field.NewPath("etcd"))...)
-	allErrs = append(allErrs, componentconfigs.Known.Validate(c)...)
+	allErrs = append(allErrs, componentconfigs.Validate(c)...)
 	return allErrs
 }
 
@@ -103,7 +103,10 @@ func ValidateNodeRegistrationOptions(nro *kubeadm.NodeRegistrationOptions, fldPa
 	if len(nro.Name) == 0 {
 		allErrs = append(allErrs, field.Required(fldPath, "--node-name or .nodeRegistration.name in the config file is a required value. It seems like this value couldn't be automatically detected in your environment, please specify the desired value using the CLI or config file."))
 	} else {
-		allErrs = append(allErrs, apivalidation.ValidateDNS1123Subdomain(nro.Name, field.NewPath("name"))...)
+		nameFldPath := fldPath.Child("name")
+		for _, err := range validation.IsDNS1123Subdomain(nro.Name) {
+			allErrs = append(allErrs, field.Invalid(nameFldPath, nro.Name, err))
+		}
 	}
 	allErrs = append(allErrs, ValidateSocketPath(nro.CRISocket, fldPath.Child("criSocket"))...)
 	// TODO: Maybe validate .Taints as well in the future using something like validateNodeTaints() in pkg/apis/core/validation
@@ -286,7 +289,7 @@ func ValidateEtcd(e *kubeadm.Etcd, fldPath *field.Path) field.ErrorList {
 		if (e.External.CertFile == "" && e.External.KeyFile != "") || (e.External.CertFile != "" && e.External.KeyFile == "") {
 			allErrs = append(allErrs, field.Invalid(externalPath, "", "either both or none of .Etcd.External.CertFile and .Etcd.External.KeyFile must be set"))
 		}
-		// If the cert and key are specified, require the VA as well
+		// If the cert and key are specified, require the CA as well
 		if e.External.CertFile != "" && e.External.KeyFile != "" && e.External.CAFile == "" {
 			allErrs = append(allErrs, field.Invalid(externalPath, "", "setting .Etcd.External.CertFile and .Etcd.External.KeyFile requires .Etcd.External.CAFile"))
 		}
@@ -320,7 +323,7 @@ func ValidateCertSANs(altnames []string, fldPath *field.Path) field.ErrorList {
 	return allErrs
 }
 
-// ValidateURLs validates the URLs given in the string slice, makes sure they are parseable. Optionally, it can enforcs HTTPS usage.
+// ValidateURLs validates the URLs given in the string slice, makes sure they are parsable. Optionally, it can enforces HTTPS usage.
 func ValidateURLs(urls []string, requireHTTPS bool, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
 	for _, urlstr := range urls {
@@ -367,27 +370,139 @@ func ValidateHostPort(endpoint string, fldPath *field.Path) field.ErrorList {
 }
 
 // ValidateIPNetFromString validates network portion of ip address
-func ValidateIPNetFromString(subnet string, minAddrs int64, fldPath *field.Path) field.ErrorList {
+func ValidateIPNetFromString(subnetStr string, minAddrs int64, isDualStack bool, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	_, svcSubnet, err := net.ParseCIDR(subnet)
+	subnets, err := utilnet.ParseCIDRs(strings.Split(subnetStr, ","))
 	if err != nil {
-		allErrs = append(allErrs, field.Invalid(fldPath, subnet, "couldn't parse subnet"))
+		allErrs = append(allErrs, field.Invalid(fldPath, subnetStr, "couldn't parse subnet"))
 		return allErrs
 	}
-	numAddresses := ipallocator.RangeSize(svcSubnet)
-	if numAddresses < minAddrs {
-		allErrs = append(allErrs, field.Invalid(fldPath, subnet, "subnet is too small"))
+	switch {
+	// if DualStack only 2 CIDRs allowed
+	case isDualStack && len(subnets) > 2:
+		allErrs = append(allErrs, field.Invalid(fldPath, subnetStr, "expected one (IPv4 or IPv6) CIDR or two CIDRs from each family for dual-stack networking"))
+	// if DualStack and there are 2 CIDRs validate if there is at least one of each IP family
+	case isDualStack && len(subnets) == 2:
+		areDualStackCIDRs, err := utilnet.IsDualStackCIDRs(subnets)
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath, subnetStr, err.Error()))
+		} else if !areDualStackCIDRs {
+			allErrs = append(allErrs, field.Invalid(fldPath, subnetStr, "expected one (IPv4 or IPv6) CIDR or two CIDRs from each family for dual-stack networking"))
+		}
+	// if not DualStack only one CIDR allowed
+	case !isDualStack && len(subnets) > 1:
+		allErrs = append(allErrs, field.Invalid(fldPath, subnetStr, "only one CIDR allowed for single-stack networking"))
+	}
+	// validate the subnet/s
+	for _, s := range subnets {
+		numAddresses := utilnet.RangeSize(s)
+		if numAddresses < minAddrs {
+			allErrs = append(allErrs, field.Invalid(fldPath, s.String(), "subnet is too small"))
+		}
 	}
 	return allErrs
 }
 
-// ValidateNetworking validates networking configuration
-func ValidateNetworking(c *kubeadm.Networking, fldPath *field.Path) field.ErrorList {
+// ValidateServiceSubnetSize validates that the maximum subnet size is not exceeded
+// Should be a small cidr due to how it is stored in etcd.
+// bigger cidr (specially those offered by IPv6) will add no value
+// and significantly increase snapshotting time.
+// NOTE: This is identical to validation performed in the apiserver.
+func ValidateServiceSubnetSize(subnetStr string, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-	allErrs = append(allErrs, apivalidation.ValidateDNS1123Subdomain(c.DNSDomain, field.NewPath("dnsDomain"))...)
-	allErrs = append(allErrs, ValidateIPNetFromString(c.ServiceSubnet, constants.MinimumAddressesInServiceSubnet, field.NewPath("serviceSubnet"))...)
-	if len(c.PodSubnet) != 0 {
-		allErrs = append(allErrs, ValidateIPNetFromString(c.PodSubnet, constants.MinimumAddressesInServiceSubnet, field.NewPath("podSubnet"))...)
+	// subnets were already validated
+	subnets, _ := utilnet.ParseCIDRs(strings.Split(subnetStr, ","))
+	for _, serviceSubnet := range subnets {
+		ones, bits := serviceSubnet.Mask.Size()
+		if bits-ones > constants.MaximumBitsForServiceSubnet {
+			errMsg := fmt.Sprintf("specified service subnet is too large; for %d-bit addresses, the mask must be >= %d", bits, bits-constants.MaximumBitsForServiceSubnet)
+			allErrs = append(allErrs, field.Invalid(fldPath, serviceSubnet.String(), errMsg))
+		}
+	}
+	return allErrs
+}
+
+// ValidatePodSubnetNodeMask validates that the relation between podSubnet and node-masks is correct
+func ValidatePodSubnetNodeMask(subnetStr string, c *kubeadm.ClusterConfiguration, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	// subnets were already validated
+	subnets, _ := utilnet.ParseCIDRs(strings.Split(subnetStr, ","))
+	for _, podSubnet := range subnets {
+		// obtain podSubnet mask
+		mask := podSubnet.Mask
+		maskSize, _ := mask.Size()
+		// obtain node-cidr-mask
+		nodeMask, err := getClusterNodeMask(c, utilnet.IsIPv6(podSubnet.IP))
+		if err != nil {
+			allErrs = append(allErrs, field.Invalid(fldPath, podSubnet.String(), err.Error()))
+			continue
+		}
+		// the pod subnet mask needs to allow one or multiple node-masks
+		// i.e. if it has a /24 the node mask must be between 24 and 32 for ipv4
+		if maskSize > nodeMask {
+			allErrs = append(allErrs, field.Invalid(fldPath, podSubnet.String(), "pod subnet size is smaller than the node subnet size"))
+		} else if (nodeMask - maskSize) > constants.PodSubnetNodeMaskMaxDiff {
+			allErrs = append(allErrs, field.Invalid(fldPath, podSubnet.String(), fmt.Sprintf("pod subnet mask and node-mask difference can not be greater than %d", constants.PodSubnetNodeMaskMaxDiff)))
+		}
+	}
+	return allErrs
+}
+
+// getClusterNodeMask returns the corresponding node-cidr-mask
+// based on the Cluster configuration and the IP family
+// Default is 24 for IPv4 and 64 for IPv6
+func getClusterNodeMask(c *kubeadm.ClusterConfiguration, isIPv6 bool) (int, error) {
+	// defaultNodeMaskCIDRIPv4 is default mask size for IPv4 node cidr for use by the controller manager
+	const defaultNodeMaskCIDRIPv4 = 24
+	// DefaultNodeMaskCIDRIPv6 is default mask size for IPv6 node cidr for use by the controller manager
+	const defaultNodeMaskCIDRIPv6 = 64
+	var maskSize int
+	var maskArg string
+	var err error
+	isDualStack := features.Enabled(c.FeatureGates, features.IPv6DualStack)
+
+	if isDualStack && isIPv6 {
+		maskArg = "node-cidr-mask-size-ipv6"
+	} else if isDualStack && !isIPv6 {
+		maskArg = "node-cidr-mask-size-ipv4"
+	} else {
+		maskArg = "node-cidr-mask-size"
+	}
+
+	if v, ok := c.ControllerManager.ExtraArgs[maskArg]; ok && v != "" {
+		// assume it is an integer, if not it will fail later
+		maskSize, err = strconv.Atoi(v)
+		if err != nil {
+			errors.Wrapf(err, "could not parse the value of the kube-controller-manager flag %s as an integer: %v", maskArg, err)
+			return 0, err
+		}
+	} else if isIPv6 {
+		maskSize = defaultNodeMaskCIDRIPv6
+	} else {
+		maskSize = defaultNodeMaskCIDRIPv4
+	}
+	return maskSize, nil
+}
+
+// ValidateNetworking validates networking configuration
+func ValidateNetworking(c *kubeadm.ClusterConfiguration, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	dnsDomainFldPath := field.NewPath("dnsDomain")
+	for _, err := range validation.IsDNS1123Subdomain(c.Networking.DNSDomain) {
+		allErrs = append(allErrs, field.Invalid(dnsDomainFldPath, c.Networking.DNSDomain, err))
+	}
+	// check if dual-stack feature-gate is enabled
+	isDualStack := features.Enabled(c.FeatureGates, features.IPv6DualStack)
+
+	if len(c.Networking.ServiceSubnet) != 0 {
+		allErrs = append(allErrs, ValidateIPNetFromString(c.Networking.ServiceSubnet, constants.MinimumAddressesInServiceSubnet, isDualStack, field.NewPath("serviceSubnet"))...)
+		// Service subnet was already validated, we need to validate now the subnet size
+		allErrs = append(allErrs, ValidateServiceSubnetSize(c.Networking.ServiceSubnet, field.NewPath("serviceSubnet"))...)
+	}
+	if len(c.Networking.PodSubnet) != 0 {
+		allErrs = append(allErrs, ValidateIPNetFromString(c.Networking.PodSubnet, constants.MinimumAddressesInPodSubnet, isDualStack, field.NewPath("podSubnet"))...)
+		// Pod subnet was already validated, we need to validate now against the node-mask
+		allErrs = append(allErrs, ValidatePodSubnetNodeMask(c.Networking.PodSubnet, c, field.NewPath("podSubnet"))...)
 	}
 	return allErrs
 }
@@ -432,7 +547,7 @@ func isAllowedFlag(flagName string) bool {
 		kubeadmcmdoptions.NodeCRISocket,
 		kubeadmcmdoptions.KubeconfigDir,
 		kubeadmcmdoptions.UploadCerts,
-		kubeadmcmdoptions.CertificateKey,
+		kubeadmcmdoptions.Patches,
 		"print-join-command", "rootfs", "v")
 	if knownFlags.Has(flagName) {
 		return true
@@ -451,7 +566,6 @@ func ValidateFeatureGates(featureGates map[string]bool, fldPath *field.Path) fie
 				fmt.Sprintf("%s is not a valid feature name.", k)))
 		}
 	}
-
 	return allErrs
 }
 
@@ -463,12 +577,25 @@ func ValidateAPIEndpoint(c *kubeadm.APIEndpoint, fldPath *field.Path) field.Erro
 	return allErrs
 }
 
-// ValidateIgnorePreflightErrors validates duplicates in ignore-preflight-errors flag.
-func ValidateIgnorePreflightErrors(ignorePreflightErrors []string) (sets.String, error) {
+// ValidateIgnorePreflightErrors validates duplicates in:
+// - ignore-preflight-errors flag and
+// - ignorePreflightErrors field in {Init,Join}Configuration files.
+func ValidateIgnorePreflightErrors(ignorePreflightErrorsFromCLI, ignorePreflightErrorsFromConfigFile []string) (sets.String, error) {
 	ignoreErrors := sets.NewString()
 	allErrs := field.ErrorList{}
 
-	for _, item := range ignorePreflightErrors {
+	for _, item := range ignorePreflightErrorsFromConfigFile {
+		ignoreErrors.Insert(strings.ToLower(item)) // parameters are case insensitive
+	}
+
+	if ignoreErrors.Has("all") {
+		// "all" is forbidden in config files. Administrators should use an
+		// explicit list of errors they want to ignore, as it can be risky to
+		// mask all errors in such a way. Hence, we return an error:
+		allErrs = append(allErrs, field.Invalid(field.NewPath("ignorePreflightErrors"), "all", "'all' cannot be used in configuration file"))
+	}
+
+	for _, item := range ignorePreflightErrorsFromCLI {
 		ignoreErrors.Insert(strings.ToLower(item)) // parameters are case insensitive
 	}
 

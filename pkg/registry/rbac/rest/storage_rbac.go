@@ -17,14 +17,16 @@ limitations under the License.
 package rest
 
 import (
+	"context"
 	"fmt"
 	"time"
 
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	rbacapiv1 "k8s.io/api/rbac/v1"
 	rbacapiv1alpha1 "k8s.io/api/rbac/v1alpha1"
 	rbacapiv1beta1 "k8s.io/api/rbac/v1beta1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -38,6 +40,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	rbacv1client "k8s.io/client-go/kubernetes/typed/rbac/v1"
 	"k8s.io/client-go/util/retry"
+	"k8s.io/component-helpers/auth/rbac/reconciliation"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/rbac"
 	"k8s.io/kubernetes/pkg/registry/rbac/clusterrole"
@@ -46,7 +49,6 @@ import (
 	"k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding"
 	clusterrolebindingpolicybased "k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding/policybased"
 	clusterrolebindingstore "k8s.io/kubernetes/pkg/registry/rbac/clusterrolebinding/storage"
-	"k8s.io/kubernetes/pkg/registry/rbac/reconciliation"
 	"k8s.io/kubernetes/pkg/registry/rbac/role"
 	rolepolicybased "k8s.io/kubernetes/pkg/registry/rbac/role/policybased"
 	rolestore "k8s.io/kubernetes/pkg/registry/rbac/role/storage"
@@ -65,30 +67,54 @@ type RESTStorageProvider struct {
 
 var _ genericapiserver.PostStartHookProvider = RESTStorageProvider{}
 
-func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, bool) {
+func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, bool, error) {
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(rbac.GroupName, legacyscheme.Scheme, legacyscheme.ParameterCodec, legacyscheme.Codecs)
 	// If you add a version here, be sure to add an entry in `k8s.io/kubernetes/cmd/kube-apiserver/app/aggregator.go with specific priorities.
 	// TODO refactor the plumbing to provide the information in the APIGroupInfo
 
 	if apiResourceConfigSource.VersionEnabled(rbacapiv1alpha1.SchemeGroupVersion) {
-		apiGroupInfo.VersionedResourcesStorageMap[rbacapiv1alpha1.SchemeGroupVersion.Version] = p.storage(rbacapiv1alpha1.SchemeGroupVersion, apiResourceConfigSource, restOptionsGetter)
+		if storageMap, err := p.storage(rbacapiv1alpha1.SchemeGroupVersion, apiResourceConfigSource, restOptionsGetter); err != nil {
+			return genericapiserver.APIGroupInfo{}, false, err
+		} else {
+			apiGroupInfo.VersionedResourcesStorageMap[rbacapiv1alpha1.SchemeGroupVersion.Version] = storageMap
+		}
 	}
 	if apiResourceConfigSource.VersionEnabled(rbacapiv1beta1.SchemeGroupVersion) {
-		apiGroupInfo.VersionedResourcesStorageMap[rbacapiv1beta1.SchemeGroupVersion.Version] = p.storage(rbacapiv1beta1.SchemeGroupVersion, apiResourceConfigSource, restOptionsGetter)
+		if storageMap, err := p.storage(rbacapiv1beta1.SchemeGroupVersion, apiResourceConfigSource, restOptionsGetter); err != nil {
+			return genericapiserver.APIGroupInfo{}, false, err
+		} else {
+			apiGroupInfo.VersionedResourcesStorageMap[rbacapiv1beta1.SchemeGroupVersion.Version] = storageMap
+		}
 	}
 	if apiResourceConfigSource.VersionEnabled(rbacapiv1.SchemeGroupVersion) {
-		apiGroupInfo.VersionedResourcesStorageMap[rbacapiv1.SchemeGroupVersion.Version] = p.storage(rbacapiv1.SchemeGroupVersion, apiResourceConfigSource, restOptionsGetter)
+		if storageMap, err := p.storage(rbacapiv1.SchemeGroupVersion, apiResourceConfigSource, restOptionsGetter); err != nil {
+			return genericapiserver.APIGroupInfo{}, false, err
+		} else {
+			apiGroupInfo.VersionedResourcesStorageMap[rbacapiv1.SchemeGroupVersion.Version] = storageMap
+		}
 	}
 
-	return apiGroupInfo, true
+	return apiGroupInfo, true, nil
 }
 
-func (p RESTStorageProvider) storage(version schema.GroupVersion, apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) map[string]rest.Storage {
+func (p RESTStorageProvider) storage(version schema.GroupVersion, apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (map[string]rest.Storage, error) {
 	storage := map[string]rest.Storage{}
-	rolesStorage := rolestore.NewREST(restOptionsGetter)
-	roleBindingsStorage := rolebindingstore.NewREST(restOptionsGetter)
-	clusterRolesStorage := clusterrolestore.NewREST(restOptionsGetter)
-	clusterRoleBindingsStorage := clusterrolebindingstore.NewREST(restOptionsGetter)
+	rolesStorage, err := rolestore.NewREST(restOptionsGetter)
+	if err != nil {
+		return storage, err
+	}
+	roleBindingsStorage, err := rolebindingstore.NewREST(restOptionsGetter)
+	if err != nil {
+		return storage, err
+	}
+	clusterRolesStorage, err := clusterrolestore.NewREST(restOptionsGetter)
+	if err != nil {
+		return storage, err
+	}
+	clusterRoleBindingsStorage, err := clusterrolebindingstore.NewREST(restOptionsGetter)
+	if err != nil {
+		return storage, err
+	}
 
 	authorizationRuleResolver := rbacregistryvalidation.NewDefaultRuleResolver(
 		role.AuthorizerAdapter{Registry: role.NewRegistry(rolesStorage)},
@@ -109,7 +135,7 @@ func (p RESTStorageProvider) storage(version schema.GroupVersion, apiResourceCon
 	// clusterrolebindings
 	storage["clusterrolebindings"] = clusterrolebindingpolicybased.NewStorage(clusterRoleBindingsStorage, p.Authorizer, authorizationRuleResolver)
 
-	return storage
+	return storage, nil
 }
 
 func (p RESTStorageProvider) PostStartHook() (string, genericapiserver.PostStartHookFunc, error) {
@@ -135,11 +161,20 @@ type PolicyData struct {
 	ClusterRoleBindingsToSplit map[string]rbacapiv1.ClusterRoleBinding
 }
 
+func isConflictOrServiceUnavailable(err error) bool {
+	return errors.IsConflict(err) || errors.IsServiceUnavailable(err)
+}
+
+func retryOnConflictOrServiceUnavailable(backoff wait.Backoff, fn func() error) error {
+	return retry.OnError(backoff, isConflictOrServiceUnavailable, fn)
+}
+
 func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 	return func(hookContext genericapiserver.PostStartHookContext) error {
-		// intializing roles is really important.  On some e2e runs, we've seen cases where etcd is down when the server
+		// initializing roles is really important.  On some e2e runs, we've seen cases where etcd is down when the server
 		// starts, the roles don't initialize, and nothing works.
 		err := wait.Poll(1*time.Second, 30*time.Second, func() (done bool, err error) {
+			failedReconciliation := false
 
 			coreclientset, err := corev1client.NewForConfig(hookContext.LoopbackClientConfig)
 			if err != nil {
@@ -153,11 +188,11 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 				return false, nil
 			}
 			// Make sure etcd is responding before we start reconciling
-			if _, err := clientset.ClusterRoles().List(metav1.ListOptions{}); err != nil {
+			if _, err := clientset.ClusterRoles().List(context.TODO(), metav1.ListOptions{}); err != nil {
 				utilruntime.HandleError(fmt.Errorf("unable to initialize clusterroles: %v", err))
 				return false, nil
 			}
-			if _, err := clientset.ClusterRoleBindings().List(metav1.ListOptions{}); err != nil {
+			if _, err := clientset.ClusterRoleBindings().List(context.TODO(), metav1.ListOptions{}); err != nil {
 				utilruntime.HandleError(fmt.Errorf("unable to initialize clusterrolebindings: %v", err))
 				return false, nil
 			}
@@ -181,7 +216,8 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 					Client:  reconciliation.ClusterRoleModifier{Client: clientset.ClusterRoles()},
 					Confirm: true,
 				}
-				err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				// ServiceUnavailble error is returned when the API server is blocked by storage version updates
+				err := retryOnConflictOrServiceUnavailable(retry.DefaultBackoff, func() error {
 					result, err := opts.Run()
 					if err != nil {
 						return err
@@ -199,6 +235,7 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 				if err != nil {
 					// don't fail on failures, try to create as many as you can
 					utilruntime.HandleError(fmt.Errorf("unable to reconcile clusterrole.%s/%s: %v", rbac.GroupName, clusterRole.Name, err))
+					failedReconciliation = true
 				}
 			}
 
@@ -209,7 +246,8 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 					Client:      reconciliation.ClusterRoleBindingClientAdapter{Client: clientset.ClusterRoleBindings()},
 					Confirm:     true,
 				}
-				err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+				// ServiceUnavailble error is returned when the API server is blocked by storage version updates
+				err := retryOnConflictOrServiceUnavailable(retry.DefaultBackoff, func() error {
 					result, err := opts.Run()
 					if err != nil {
 						return err
@@ -229,6 +267,7 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 				if err != nil {
 					// don't fail on failures, try to create as many as you can
 					utilruntime.HandleError(fmt.Errorf("unable to reconcile clusterrolebinding.%s/%s: %v", rbac.GroupName, clusterRoleBinding.Name, err))
+					failedReconciliation = true
 				}
 			}
 
@@ -240,7 +279,8 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 						Client:  reconciliation.RoleModifier{Client: clientset, NamespaceClient: coreclientset.Namespaces()},
 						Confirm: true,
 					}
-					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+					// ServiceUnavailble error is returned when the API server is blocked by storage version updates
+					err := retryOnConflictOrServiceUnavailable(retry.DefaultBackoff, func() error {
 						result, err := opts.Run()
 						if err != nil {
 							return err
@@ -258,6 +298,7 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 					if err != nil {
 						// don't fail on failures, try to create as many as you can
 						utilruntime.HandleError(fmt.Errorf("unable to reconcile role.%s/%s in %v: %v", rbac.GroupName, role.Name, namespace, err))
+						failedReconciliation = true
 					}
 				}
 			}
@@ -270,7 +311,8 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 						Client:      reconciliation.RoleBindingClientAdapter{Client: clientset, NamespaceClient: coreclientset.Namespaces()},
 						Confirm:     true,
 					}
-					err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+					// ServiceUnavailble error is returned when the API server is blocked by storage version updates
+					err := retryOnConflictOrServiceUnavailable(retry.DefaultBackoff, func() error {
 						result, err := opts.Run()
 						if err != nil {
 							return err
@@ -290,8 +332,13 @@ func (p *PolicyData) EnsureRBACPolicy() genericapiserver.PostStartHookFunc {
 					if err != nil {
 						// don't fail on failures, try to create as many as you can
 						utilruntime.HandleError(fmt.Errorf("unable to reconcile rolebinding.%s/%s in %v: %v", rbac.GroupName, roleBinding.Name, namespace, err))
+						failedReconciliation = true
 					}
 				}
+			}
+			// failed to reconcile some objects, retry
+			if failedReconciliation {
+				return false, nil
 			}
 
 			return true, nil
@@ -313,7 +360,7 @@ func (p RESTStorageProvider) GroupName() string {
 // that were done to the legacy roles.
 func primeAggregatedClusterRoles(clusterRolesToAggregate map[string]string, clusterRoleClient rbacv1client.ClusterRolesGetter) error {
 	for oldName, newName := range clusterRolesToAggregate {
-		_, err := clusterRoleClient.ClusterRoles().Get(newName, metav1.GetOptions{})
+		_, err := clusterRoleClient.ClusterRoles().Get(context.TODO(), newName, metav1.GetOptions{})
 		if err == nil {
 			continue
 		}
@@ -321,7 +368,7 @@ func primeAggregatedClusterRoles(clusterRolesToAggregate map[string]string, clus
 			return err
 		}
 
-		existingRole, err := clusterRoleClient.ClusterRoles().Get(oldName, metav1.GetOptions{})
+		existingRole, err := clusterRoleClient.ClusterRoles().Get(context.TODO(), oldName, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -335,7 +382,7 @@ func primeAggregatedClusterRoles(clusterRolesToAggregate map[string]string, clus
 		klog.V(1).Infof("migrating %v to %v", existingRole.Name, newName)
 		existingRole.Name = newName
 		existingRole.ResourceVersion = "" // clear this so the object can be created.
-		if _, err := clusterRoleClient.ClusterRoles().Create(existingRole); err != nil && !apierrors.IsAlreadyExists(err) {
+		if _, err := clusterRoleClient.ClusterRoles().Create(context.TODO(), existingRole, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
 	}
@@ -349,7 +396,7 @@ func primeAggregatedClusterRoles(clusterRolesToAggregate map[string]string, clus
 func primeSplitClusterRoleBindings(clusterRoleBindingToSplit map[string]rbacapiv1.ClusterRoleBinding, clusterRoleBindingClient rbacv1client.ClusterRoleBindingsGetter) error {
 	for existingBindingName, clusterRoleBindingToCreate := range clusterRoleBindingToSplit {
 		// If source ClusterRoleBinding does not exist, do nothing.
-		existingRoleBinding, err := clusterRoleBindingClient.ClusterRoleBindings().Get(existingBindingName, metav1.GetOptions{})
+		existingRoleBinding, err := clusterRoleBindingClient.ClusterRoleBindings().Get(context.TODO(), existingBindingName, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -358,7 +405,7 @@ func primeSplitClusterRoleBindings(clusterRoleBindingToSplit map[string]rbacapiv
 		}
 
 		// If the target ClusterRoleBinding already exists, do nothing.
-		_, err = clusterRoleBindingClient.ClusterRoleBindings().Get(clusterRoleBindingToCreate.Name, metav1.GetOptions{})
+		_, err = clusterRoleBindingClient.ClusterRoleBindings().Get(context.TODO(), clusterRoleBindingToCreate.Name, metav1.GetOptions{})
 		if err == nil {
 			continue
 		}
@@ -373,7 +420,7 @@ func primeSplitClusterRoleBindings(clusterRoleBindingToSplit map[string]rbacapiv
 		newCRB.Subjects = existingRoleBinding.Subjects
 		newCRB.Labels = existingRoleBinding.Labels
 		newCRB.Annotations = existingRoleBinding.Annotations
-		if _, err := clusterRoleBindingClient.ClusterRoleBindings().Create(newCRB); err != nil && !apierrors.IsAlreadyExists(err) {
+		if _, err := clusterRoleBindingClient.ClusterRoleBindings().Create(context.TODO(), newCRB, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
 	}

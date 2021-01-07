@@ -1,3 +1,5 @@
+// +build !providerless
+
 /*
 Copyright 2016 The Kubernetes Authors.
 
@@ -17,6 +19,7 @@ limitations under the License.
 package azure_file
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -31,9 +34,12 @@ const (
 	dirMode         = "dir_mode"
 	gid             = "gid"
 	vers            = "vers"
+	actimeo         = "actimeo"
+	mfsymlinks      = "mfsymlinks"
 	defaultFileMode = "0777"
 	defaultDirMode  = "0777"
 	defaultVers     = "3.0"
+	defaultActimeo  = "30"
 )
 
 // Abstract interface to azure file operations.
@@ -51,7 +57,7 @@ func (s *azureSvc) GetAzureCredentials(host volume.VolumeHost, nameSpace, secret
 		return "", "", fmt.Errorf("Cannot get kube client")
 	}
 
-	keys, err := kubeClient.CoreV1().Secrets(nameSpace).Get(secretName, metav1.GetOptions{})
+	keys, err := kubeClient.CoreV1().Secrets(nameSpace).Get(context.TODO(), secretName, metav1.GetOptions{})
 	if err != nil {
 		return "", "", fmt.Errorf("Couldn't get secret %v/%v", nameSpace, secretName)
 	}
@@ -66,6 +72,7 @@ func (s *azureSvc) GetAzureCredentials(host volume.VolumeHost, nameSpace, secret
 	if accountName == "" || accountKey == "" {
 		return "", "", fmt.Errorf("Invalid %v/%v, couldn't extract azurestorageaccountname or azurestorageaccountkey", nameSpace, secretName)
 	}
+	accountName = strings.TrimSpace(accountName)
 	return accountName, accountKey, nil
 }
 
@@ -86,7 +93,7 @@ func (s *azureSvc) SetAzureCredentials(host volume.VolumeHost, nameSpace, accoun
 		},
 		Type: "Opaque",
 	}
-	_, err := kubeClient.CoreV1().Secrets(nameSpace).Create(secret)
+	_, err := kubeClient.CoreV1().Secrets(nameSpace).Create(context.TODO(), secret, metav1.CreateOptions{})
 	if errors.IsAlreadyExists(err) {
 		err = nil
 	}
@@ -102,6 +109,8 @@ func appendDefaultMountOptions(mountOptions []string, fsGroup *int64) []string {
 	dirModeFlag := false
 	versFlag := false
 	gidFlag := false
+	actimeoFlag := false
+	mfsymlinksFlag := false
 
 	for _, mountOption := range mountOptions {
 		if strings.HasPrefix(mountOption, fileMode) {
@@ -115,6 +124,12 @@ func appendDefaultMountOptions(mountOptions []string, fsGroup *int64) []string {
 		}
 		if strings.HasPrefix(mountOption, gid) {
 			gidFlag = true
+		}
+		if strings.HasPrefix(mountOption, actimeo) {
+			actimeoFlag = true
+		}
+		if strings.HasPrefix(mountOption, mfsymlinks) {
+			mfsymlinksFlag = true
 		}
 	}
 
@@ -133,6 +148,14 @@ func appendDefaultMountOptions(mountOptions []string, fsGroup *int64) []string {
 
 	if !gidFlag && fsGroup != nil {
 		allMountOptions = append(allMountOptions, fmt.Sprintf("%s=%d", gid, *fsGroup))
+	}
+
+	if !actimeoFlag {
+		allMountOptions = append(allMountOptions, fmt.Sprintf("%s=%s", actimeo, defaultActimeo))
+	}
+
+	if !mfsymlinksFlag {
+		allMountOptions = append(allMountOptions, mfsymlinks)
 	}
 	return allMountOptions
 }

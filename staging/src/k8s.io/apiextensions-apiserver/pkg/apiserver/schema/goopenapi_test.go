@@ -19,7 +19,6 @@ package schema
 import (
 	"math/rand"
 	"reflect"
-	"regexp"
 	"testing"
 	"time"
 
@@ -31,8 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/json"
 )
 
-var nullTypeRE = regexp.MustCompile(`"type":\["([^"]*)","null"]`)
-
 func TestStructuralRoundtrip(t *testing.T) {
 	f := fuzz.New()
 	seed := time.Now().UnixNano()
@@ -41,31 +38,21 @@ func TestStructuralRoundtrip(t *testing.T) {
 	f.RandSource(rand.New(rand.NewSource(seed)))
 	f.Funcs(
 		func(s *JSON, c fuzz.Continue) {
-			switch c.Intn(6) {
+			switch c.Intn(7) {
 			case 0:
-				s.Object = float64(42.0)
+				s.Object = float64(42.2)
 			case 1:
 				s.Object = map[string]interface{}{"foo": "bar"}
 			case 2:
 				s.Object = ""
 			case 3:
-				s.Object = []string{}
+				s.Object = []interface{}{}
 			case 4:
 				s.Object = map[string]interface{}{}
 			case 5:
 				s.Object = nil
-			}
-		},
-		func(g *Generic, c fuzz.Continue) {
-			c.FuzzNoCustom(g)
-
-			// TODO: make nullable in case of empty type survive go-openapi JSON -> API schema roundtrip
-			// go-openapi does not support nullable. Adding it to a type slice produces OpenAPI v3
-			// incompatible JSON which we cannot unmarshal (without string-replace magic to transform
-			// null types back into nullable). If type is empty, nullable:true is not preserved
-			// at all.
-			if len(g.Type) == 0 {
-				g.Nullable = false
+			case 6:
+				s.Object = int64(42)
 			}
 		},
 	)
@@ -93,9 +80,8 @@ func TestStructuralRoundtrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		str := nullTypeRE.ReplaceAllString(string(bs), `"type":"$1","nullable":true`) // unfold nullable type:[<type>,"null"] -> type:<type>,nullable:true
 		v1beta1Schema := &apiextensionsv1beta1.JSONSchemaProps{}
-		err = json.Unmarshal([]byte(str), v1beta1Schema)
+		err = json.Unmarshal(bs, v1beta1Schema)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,7 +96,7 @@ func TestStructuralRoundtrip(t *testing.T) {
 		}
 
 		if !reflect.DeepEqual(orig, s) {
-			t.Fatalf("original and result differ: %v", diff.ObjectDiff(orig, s))
+			t.Fatalf("original and result differ: %v", diff.ObjectGoPrintDiff(orig, s))
 		}
 	}
 }

@@ -20,12 +20,10 @@ import (
 	"fmt"
 
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
-	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
-	apiextensionsfeatures "k8s.io/apiextensions-apiserver/pkg/features"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
 	typedscheme "k8s.io/client-go/kubernetes/scheme"
 )
@@ -35,26 +33,25 @@ type CRConverterFactory struct {
 	// webhookConverterFactory is the factory for webhook converters.
 	// This field should not be used if CustomResourceWebhookConversion feature is disabled.
 	webhookConverterFactory *webhookConverterFactory
-	converterMetricFactory  *converterMetricFactory
 }
+
+// converterMetricFactorySingleton protects us from reregistration of metrics on repeated
+// apiextensions-apiserver runs.
+var converterMetricFactorySingleton = newConverterMertricFactory()
 
 // NewCRConverterFactory creates a new CRConverterFactory
 func NewCRConverterFactory(serviceResolver webhook.ServiceResolver, authResolverWrapper webhook.AuthenticationInfoResolverWrapper) (*CRConverterFactory, error) {
-	converterFactory := &CRConverterFactory{
-		converterMetricFactory: newConverterMertricFactory(),
+	converterFactory := &CRConverterFactory{}
+	webhookConverterFactory, err := newWebhookConverterFactory(serviceResolver, authResolverWrapper)
+	if err != nil {
+		return nil, err
 	}
-	if utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceWebhookConversion) {
-		webhookConverterFactory, err := newWebhookConverterFactory(serviceResolver, authResolverWrapper)
-		if err != nil {
-			return nil, err
-		}
-		converterFactory.webhookConverterFactory = webhookConverterFactory
-	}
+	converterFactory.webhookConverterFactory = webhookConverterFactory
 	return converterFactory, nil
 }
 
 // NewConverter returns a new CR converter based on the conversion settings in crd object.
-func (m *CRConverterFactory) NewConverter(crd *apiextensions.CustomResourceDefinition) (safe, unsafe runtime.ObjectConvertor, err error) {
+func (m *CRConverterFactory) NewConverter(crd *apiextensionsv1.CustomResourceDefinition) (safe, unsafe runtime.ObjectConvertor, err error) {
 	validVersions := map[schema.GroupVersion]bool{}
 	for _, version := range crd.Spec.Versions {
 		validVersions[schema.GroupVersion{Group: crd.Spec.Group, Version: version.Name}] = true
@@ -62,17 +59,14 @@ func (m *CRConverterFactory) NewConverter(crd *apiextensions.CustomResourceDefin
 
 	var converter crConverterInterface
 	switch crd.Spec.Conversion.Strategy {
-	case apiextensions.NoneConverter:
+	case apiextensionsv1.NoneConverter:
 		converter = &nopConverter{}
-	case apiextensions.WebhookConverter:
-		if !utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceWebhookConversion) {
-			return nil, nil, fmt.Errorf("webhook conversion is disabled on this cluster")
-		}
+	case apiextensionsv1.WebhookConverter:
 		converter, err = m.webhookConverterFactory.NewWebhookConverter(crd)
 		if err != nil {
 			return nil, nil, err
 		}
-		converter, err = m.converterMetricFactory.addMetrics("webhook", crd.Name, converter)
+		converter, err = converterMetricFactorySingleton.addMetrics("webhook", crd.Name, converter)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -82,19 +76,16 @@ func (m *CRConverterFactory) NewConverter(crd *apiextensions.CustomResourceDefin
 
 	// Determine whether we should expect to be asked to "convert" autoscaling/v1 Scale types
 	convertScale := false
-	if utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceSubresources) {
-		convertScale = crd.Spec.Subresources != nil && crd.Spec.Subresources.Scale != nil
-		for _, version := range crd.Spec.Versions {
-			if version.Subresources != nil && version.Subresources.Scale != nil {
-				convertScale = true
-			}
+	for _, version := range crd.Spec.Versions {
+		if version.Subresources != nil && version.Subresources.Scale != nil {
+			convertScale = true
 		}
 	}
 
 	unsafe = &crConverter{
 		convertScale:  convertScale,
 		validVersions: validVersions,
-		clusterScoped: crd.Spec.Scope == apiextensions.ClusterScoped,
+		clusterScoped: crd.Spec.Scope == apiextensionsv1.ClusterScoped,
 		converter:     converter,
 	}
 	return &safeConverterWrapper{unsafe}, unsafe, nil

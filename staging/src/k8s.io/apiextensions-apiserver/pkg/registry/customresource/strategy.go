@@ -19,8 +19,6 @@ package customresource
 import (
 	"context"
 
-	"github.com/go-openapi/validate"
-
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,10 +30,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	apiserverstorage "k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/names"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/kube-openapi/pkg/validation/validate"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
-	apiextensionsfeatures "k8s.io/apiextensions-apiserver/pkg/features"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+	structurallisttype "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
+	schemaobjectmeta "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/objectmeta"
 )
 
 // customResourceStrategy implements behavior for CustomResources.
@@ -43,13 +43,14 @@ type customResourceStrategy struct {
 	runtime.ObjectTyper
 	names.NameGenerator
 
-	namespaceScoped bool
-	validator       customResourceValidator
-	status          *apiextensions.CustomResourceSubresourceStatus
-	scale           *apiextensions.CustomResourceSubresourceScale
+	namespaceScoped   bool
+	validator         customResourceValidator
+	structuralSchemas map[string]*structuralschema.Structural
+	status            *apiextensions.CustomResourceSubresourceStatus
+	scale             *apiextensions.CustomResourceSubresourceScale
 }
 
-func NewStrategy(typer runtime.ObjectTyper, namespaceScoped bool, kind schema.GroupVersionKind, schemaValidator, statusSchemaValidator *validate.SchemaValidator, status *apiextensions.CustomResourceSubresourceStatus, scale *apiextensions.CustomResourceSubresourceScale) customResourceStrategy {
+func NewStrategy(typer runtime.ObjectTyper, namespaceScoped bool, kind schema.GroupVersionKind, schemaValidator, statusSchemaValidator *validate.SchemaValidator, structuralSchemas map[string]*structuralschema.Structural, status *apiextensions.CustomResourceSubresourceStatus, scale *apiextensions.CustomResourceSubresourceScale) customResourceStrategy {
 	return customResourceStrategy{
 		ObjectTyper:     typer,
 		NameGenerator:   names.SimpleNameGenerator,
@@ -62,6 +63,7 @@ func NewStrategy(typer runtime.ObjectTyper, namespaceScoped bool, kind schema.Gr
 			schemaValidator:       schemaValidator,
 			statusSchemaValidator: statusSchemaValidator,
 		},
+		structuralSchemas: structuralSchemas,
 	}
 }
 
@@ -71,14 +73,12 @@ func (a customResourceStrategy) NamespaceScoped() bool {
 
 // PrepareForCreate clears the status of a CustomResource before creation.
 func (a customResourceStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
-	if utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceSubresources) && a.status != nil {
+	if a.status != nil {
 		customResourceObject := obj.(*unstructured.Unstructured)
 		customResource := customResourceObject.UnstructuredContent()
 
 		// create cannot set status
-		if _, ok := customResource["status"]; ok {
-			delete(customResource, "status")
-		}
+		delete(customResource, "status")
 	}
 
 	accessor, _ := meta.Accessor(obj)
@@ -94,7 +94,7 @@ func (a customResourceStrategy) PrepareForUpdate(ctx context.Context, obj, old r
 	oldCustomResource := oldCustomResourceObject.UnstructuredContent()
 
 	// If the /status subresource endpoint is installed, update is not allowed to set status.
-	if utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceSubresources) && a.status != nil {
+	if a.status != nil {
 		_, ok1 := newCustomResource["status"]
 		_, ok2 := oldCustomResource["status"]
 		switch {
@@ -129,7 +129,19 @@ func copyNonMetadata(original map[string]interface{}) map[string]interface{} {
 
 // Validate validates a new CustomResource.
 func (a customResourceStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
-	return a.validator.Validate(ctx, obj, a.scale)
+	var errs field.ErrorList
+	errs = append(errs, a.validator.Validate(ctx, obj, a.scale)...)
+
+	// validate embedded resources
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		v := obj.GetObjectKind().GroupVersionKind().Version
+		errs = append(errs, schemaobjectmeta.Validate(nil, u.Object, a.structuralSchemas[v], false)...)
+
+		// validate x-kubernetes-list-type "map" and "set" invariant
+		errs = append(errs, structurallisttype.ValidateListSetsAndMaps(nil, a.structuralSchemas[v], u.Object)...)
+	}
+
+	return errs
 }
 
 // Canonicalize normalizes the object after validation.
@@ -149,7 +161,28 @@ func (customResourceStrategy) AllowUnconditionalUpdate() bool {
 
 // ValidateUpdate is the default update validation for an end user updating status.
 func (a customResourceStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	return a.validator.ValidateUpdate(ctx, obj, old, a.scale)
+	var errs field.ErrorList
+	errs = append(errs, a.validator.ValidateUpdate(ctx, obj, old, a.scale)...)
+
+	uNew, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return errs
+	}
+	uOld, ok := old.(*unstructured.Unstructured)
+	if !ok {
+		return errs
+	}
+
+	// Checks the embedded objects. We don't make a difference between update and create for those.
+	v := obj.GetObjectKind().GroupVersionKind().Version
+	errs = append(errs, schemaobjectmeta.Validate(nil, uNew.Object, a.structuralSchemas[v], false)...)
+
+	// ratcheting validation of x-kubernetes-list-type value map and set
+	if oldErrs := structurallisttype.ValidateListSetsAndMaps(nil, a.structuralSchemas[v], uOld.Object); len(oldErrs) == 0 {
+		errs = append(errs, structurallisttype.ValidateListSetsAndMaps(nil, a.structuralSchemas[v], uNew.Object)...)
+	}
+
+	return errs
 }
 
 // GetAttrs returns labels and fields of a given object for filtering purposes.

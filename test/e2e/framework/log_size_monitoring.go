@@ -26,6 +26,8 @@ import (
 	"time"
 
 	clientset "k8s.io/client-go/kubernetes"
+
+	// TODO: Remove the following imports (ref: https://github.com/kubernetes/kubernetes/issues/81245)
 	e2essh "k8s.io/kubernetes/test/e2e/framework/ssh"
 )
 
@@ -157,7 +159,7 @@ func (d *LogsSizeData) addNewData(ip, path string, timestamp time.Time, size int
 func NewLogsVerifier(c clientset.Interface, stopChannel chan bool) *LogsSizeVerifier {
 	nodeAddresses, err := e2essh.NodeSSHHosts(c)
 	ExpectNoError(err)
-	masterAddress := GetMasterHost() + ":22"
+	instanceAddress := APIAddress() + ":22"
 
 	workChannel := make(chan WorkItem, len(nodeAddresses)+1)
 	workers := make([]*LogSizeGatherer, workersNo)
@@ -165,8 +167,8 @@ func NewLogsVerifier(c clientset.Interface, stopChannel chan bool) *LogsSizeVeri
 	verifier := &LogsSizeVerifier{
 		client:        c,
 		stopChannel:   stopChannel,
-		data:          prepareData(masterAddress, nodeAddresses),
-		masterAddress: masterAddress,
+		data:          prepareData(instanceAddress, nodeAddresses),
+		masterAddress: instanceAddress,
 		nodeAddresses: nodeAddresses,
 		wg:            sync.WaitGroup{},
 		workChannel:   workChannel,

@@ -85,7 +85,8 @@ type CustomResourceDefinitionSpec struct {
 type CustomResourceConversion struct {
 	// `strategy` specifies the conversion strategy. Allowed values are:
 	// - `None`: The converter only change the apiVersion and would not touch any other field in the CR.
-	// - `Webhook`: API Server will call to an external webhook to do the conversion. Additional information is needed for this option.
+	// - `Webhook`: API Server will call to an external webhook to do the conversion. Additional information
+	//   is needed for this option. This requires spec.preserveUnknownFields to be false.
 	Strategy ConversionStrategyType
 
 	// `webhookClientConfig` is the instructions for how to call the webhook if strategy is `Webhook`.
@@ -176,6 +177,15 @@ type CustomResourceDefinitionVersion struct {
 	// Storage flags the version as storage version. There must be exactly one flagged
 	// as storage version.
 	Storage bool
+	// deprecated indicates this version of the custom resource API is deprecated.
+	// When set to true, API requests to this version receive a warning header in the server response.
+	// Defaults to false.
+	Deprecated bool
+	// deprecationWarning overrides the default warning returned to API clients.
+	// May only be set when `deprecated` is true.
+	// The default warning indicates this version is deprecated and recommends use
+	// of the newest served version of equal or greater stability, if one exists.
+	DeprecationWarning *string
 	// Schema describes the schema for CustomResource used in validation, pruning, and defaulting.
 	// Top-level and per-version schemas are mutually exclusive.
 	// Per-version schemas must not all be set to identical values (top-level validation schema should be used instead)
@@ -288,6 +298,11 @@ const (
 	NonStructuralSchema CustomResourceDefinitionConditionType = "NonStructuralSchema"
 	// Terminating means that the CustomResourceDefinition has been deleted and is cleaning up.
 	Terminating CustomResourceDefinitionConditionType = "Terminating"
+	// KubernetesAPIApprovalPolicyConformant indicates that an API in *.k8s.io or *.kubernetes.io is or is not approved.  For CRDs
+	// outside those groups, this condition will not be set.  For CRDs inside those groups, the condition will
+	// be true if .metadata.annotations["api-approved.kubernetes.io"] is set to a URL, otherwise it will be false.
+	// See https://github.com/kubernetes/enhancements/pull/1111 for more details.
+	KubernetesAPIApprovalPolicyConformant CustomResourceDefinitionConditionType = "KubernetesAPIApprovalPolicyConformant"
 )
 
 // CustomResourceDefinitionCondition contains details for the current condition of this pod.
@@ -393,8 +408,11 @@ type CustomResourceSubresourceScale struct {
 	StatusReplicasPath string
 	// LabelSelectorPath defines the JSON path inside of a CustomResource that corresponds to Scale.Status.Selector.
 	// Only JSON paths without the array notation are allowed.
-	// Must be a JSON Path under .status.
+	// Must be a JSON Path under .status or .spec.
 	// Must be set to work with HPA.
+	// The field pointed by this JSON path must be a string field (not a complex selector struct)
+	// which contains a serialized label selector in string form.
+	// More info: https://kubernetes.io/docs/tasks/access-kubernetes-api/custom-resources/custom-resource-definitions#scale-subresource
 	// If there is no value under the given path in the CustomResource, the status label selector value in the /scale
 	// subresource will default to the empty string.
 	// +optional

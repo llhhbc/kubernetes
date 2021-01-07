@@ -30,8 +30,9 @@ func Funcs(codecs runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
 		fuzzInitConfiguration,
 		fuzzClusterConfiguration,
-		fuzzComponentConfigs,
+		fuzzComponentConfigMap,
 		fuzzDNS,
+		fuzzNodeRegistration,
 		fuzzLocalEtcd,
 		fuzzNetworking,
 		fuzzJoinConfiguration,
@@ -87,6 +88,13 @@ func fuzzInitConfiguration(obj *kubeadm.InitConfiguration, c fuzz.Continue) {
 	obj.CertificateKey = ""
 }
 
+func fuzzNodeRegistration(obj *kubeadm.NodeRegistrationOptions, c fuzz.Continue) {
+	c.FuzzNoCustom(obj)
+
+	// Pinning values for fields that get defaults if fuzz value is empty string or nil (thus making the round trip test fail)
+	obj.IgnorePreflightErrors = nil
+}
+
 func fuzzClusterConfiguration(obj *kubeadm.ClusterConfiguration, c fuzz.Continue) {
 	c.FuzzNoCustom(obj)
 
@@ -108,7 +116,7 @@ func fuzzDNS(obj *kubeadm.DNS, c fuzz.Continue) {
 	obj.Type = kubeadm.CoreDNS
 }
 
-func fuzzComponentConfigs(obj *kubeadm.ComponentConfigs, c fuzz.Continue) {
+func fuzzComponentConfigMap(obj *kubeadm.ComponentConfigMap, c fuzz.Continue) {
 	// This is intentionally empty because component config does not exists in the public api
 	// (empty mean all ComponentConfigs fields nil, and this is necessary for getting roundtrip passing)
 }
