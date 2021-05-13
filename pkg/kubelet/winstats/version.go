@@ -33,33 +33,33 @@ type OSInfo struct {
 func GetOSInfo() (*OSInfo, error) {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows NT\CurrentVersion`, registry.QUERY_VALUE)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open Windows CurrentVersion failed: %w", err)
 	}
 	defer k.Close()
 
 	buildNumber, _, err := k.GetStringValue("CurrentBuildNumber")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getOSInfo, get CurrentBuildNumber failed: %w", err)
 	}
 
 	majorVersionNumber, _, err := k.GetIntegerValue("CurrentMajorVersionNumber")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getOSInfo, get CurrentMajorVersionNumber failed: %w", err)
 	}
 
 	minorVersionNumber, _, err := k.GetIntegerValue("CurrentMinorVersionNumber")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getOSInfo, get CurrentMinorVersionNumber failed: %w", err)
 	}
 
 	revision, _, err := k.GetIntegerValue("UBR")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getOSInfo, get UBR failed: %w", err)
 	}
 
 	productName, _, err := k.GetStringValue("ProductName")
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("getOSInfo, get ProductName failed: %w", err)
 	}
 
 	return &OSInfo{
