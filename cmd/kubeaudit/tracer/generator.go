@@ -1,4 +1,4 @@
-package main
+package tracer
 
 import (
 	"context"
@@ -49,7 +49,7 @@ func (gen *MyIdGenerator) NewSpanID(ctx context.Context, traceID trace.TraceID) 
 	return
 }
 
-func NewMyIDGenerator() *MyIdGenerator  {
+func NewMyIDGenerator() *MyIdGenerator {
 	gen := MyIdGenerator{}
 
 	var rngSeed int64

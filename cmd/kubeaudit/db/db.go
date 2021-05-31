@@ -1,15 +1,16 @@
-package main
+package db
 
 import (
 	"encoding/json"
 	"flag"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"github.com/google/uuid"
 	"k8s.io/klog"
+	"github.com/mattbaird/jsonpatch"
 )
 
 var DB *gorm.DB
@@ -26,7 +27,10 @@ type AuditInfo struct {
 	TraceId string `gorm:"type:varchar(36)"`
 	IsRoot bool
 	ParentUuid string `gorm:"type:varchar(36)"`
-	Context []byte `gorm:"type:text(65535)"`
+	Context string `gorm:"type:text(65535)"`
+	EventTime int64 `gorm:"index"`
+	ContextDiff string `gorm:"type:text(65535)"`
+	OldVersion string `gorm:"type:varchar(20)"`
 }
 
 func (t *AuditInfo) ToString() string  {
@@ -34,7 +38,7 @@ func (t *AuditInfo) ToString() string  {
 	return string(m)
 }
 
-func NewAuditInfo(obj *unstructured.Unstructured, event string)  *AuditInfo {
+func NewAuditInfo(obj, oldObj *unstructured.Unstructured, event string)  *AuditInfo {
 	res := AuditInfo{}
 
 	res.Uuid = string(obj.GetUID())
@@ -48,7 +52,19 @@ func NewAuditInfo(obj *unstructured.Unstructured, event string)  *AuditInfo {
 	} else {
 		res.ParentUuid = string(owner[0].UID)
 	}
-	res.Context, _ = obj.MarshalJSON()
+	m, _ := obj.MarshalJSON()
+	res.Context = string(m)
+	res.EventTime = time.Now().UnixNano()
+
+	if oldObj != nil {
+		oldM, _ := oldObj.MarshalJSON()
+
+		diff, _ := jsonpatch.CreatePatch(oldM, m)
+		diffM, _ := json.Marshal(diff)
+		res.ContextDiff = string(diffM)
+		res.OldVersion = oldObj.GetResourceVersion()
+	}
+
 	return &res
 }
 
@@ -80,7 +96,7 @@ func NewMetaData(obj *unstructured.Unstructured)  *MetaData {
 }
 
 var (
-	dbaddr = flag.String("dbaddr", "root:letsg0@tcp(10.10.40.2:30083)/audit?parseTime=true&timeout=5s&readTimeout=6s&charset=utf8&parseTime=true&loc=Local", "db addr. ")
+	dbaddr = flag.String("dbaddr", "root:letsg0@tcp(10.10.40.2:30083)/audit?parseTime=true&timeout=10s&readTimeout=6s&charset=utf8&parseTime=true&loc=Local", "db addr. ")
 )
 
 func InitDb()  {
