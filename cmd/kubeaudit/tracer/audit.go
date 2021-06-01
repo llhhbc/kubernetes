@@ -110,12 +110,19 @@ func (t *JaegerAudit) Run() {
 	for {
 		time.Sleep(20 * time.Second)
 		klog.Infof("%s scan start time %s. ", t.groupName, time.Unix(startTime/1e9, startTime%1e9).Format(time.RFC3339Nano))
-		row, err := ldb.Model(&db.AuditInfo{}).Where("event_time > ? ", startTime).Rows()
+		cdb := ldb.Model(&db.AuditInfo{}).Where("event_time > ? ", startTime)
+		if t.groupName != "" {
+			cdb.Where("uuid in (select uuid from meta_data where api_version = ? ) ", t.groupName)
+		}
+		row, err := cdb.Rows()
 		if err != nil {
 			klog.Errorf("get audit info failed %v. ", err)
 			continue
 		}
+		scanStart := time.Now()
+		count := 0
 		for row.Next() {
+			count ++
 			ai := &db.AuditInfo{}
 			err = ldb.ScanRows(row, &ai)
 			if err != nil {
@@ -135,7 +142,8 @@ func (t *JaegerAudit) Run() {
 			startTime = ai.EventTime // increase
 		}
 		row.Close()
-
+		klog.Infof("%s scan end, start %s, end %s count %d. ", t.groupName,
+			scanStart.Format(time.RFC3339Nano), time.Now().Format(time.RFC3339Nano), count)
 	}
 }
 
@@ -148,6 +156,11 @@ workFlow:
    4.1:  update cache: uuid->traceID  ---> end
  3.2(Yes): traceID, selfID, <spanID>
 */
+
+/*
+增加二套显示方式：
+traceID统一为根资源的uid，这样单一资源的修改就整合了
+ */
 func (t *JaegerAudit) DoAuditInfo(ai *db.AuditInfo, md *db.MetaData) {
 	if ai.IsRoot {
 		t.JaegerRecord(ai.TraceId, ai.Uuid, "", ai, md)
@@ -203,12 +216,14 @@ func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.Audi
 	ctx := context.Background()
 	tr := t.tp.Tracer(md.SelfLink)
 
+	spanName := fmt.Sprintf("%s/%s/%s", md.Kind, md.Namespace, md.Name)
+
 	var span trace.Span
 	if noParent {
 		t.mid.Lock()
 		t.mid.TraceID = tid
 		t.mid.SpanID = pid
-		_, span = tr.Start(ctx, md.Kind)
+		_, span = tr.Start(ctx, spanName)
 		defer span.End()
 		t.mid.Unlock()
 
@@ -224,7 +239,7 @@ func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.Audi
 		t.mid.Lock()
 		t.mid.TraceID = tid
 		t.mid.SpanID = sid
-		_, span = tr.Start(trace.ContextWithRemoteSpanContext(ctx, parentCtx), md.Kind)
+		_, span = tr.Start(trace.ContextWithRemoteSpanContext(ctx, parentCtx), spanName)
 		defer span.End()
 		t.mid.Unlock()
 		span.SetAttributes(attribute.String(spanJob, ""))

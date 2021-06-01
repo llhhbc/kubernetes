@@ -2,6 +2,8 @@ package main
 
 import (
 	"flag"
+	"net/http"
+	_ "net/http/pprof"
 
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/klog"
@@ -33,6 +35,8 @@ func main() {
 	go c.Run()
 
 	go RunJaegerByGroup()
+
+	go http.ListenAndServe(":9091", nil)
 
 	select {}
 }

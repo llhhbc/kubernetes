@@ -18,6 +18,10 @@ import (
 
 var DB *gorm.DB
 
+var (
+	noNewTraceID = flag.Bool("noNewTraceID", false, "root resource if generate traceID")
+)
+
 /*
 1. uuid 统一使用k8s的uuid, 并增加版本信息说明. uuid加版本为唯一键值
 2. 当根资源发生变化时，会生成新的traceID
@@ -51,7 +55,11 @@ func NewAuditInfo(obj, oldObj *unstructured.Unstructured, event string) *AuditIn
 	owner := obj.GetOwnerReferences()
 	if owner == nil || len(owner) == 0 {
 		res.IsRoot = true
-		res.TraceId = uuid.NewString()
+		if *noNewTraceID {
+			res.TraceId = res.Uuid
+		} else {
+			res.TraceId = uuid.NewString()
+		}
 	} else {
 		res.ParentUuid = string(owner[0].UID)
 	}
