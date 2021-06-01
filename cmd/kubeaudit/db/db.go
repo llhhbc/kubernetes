@@ -3,14 +3,17 @@ package db
 import (
 	"encoding/json"
 	"flag"
+	"log"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mattbaird/jsonpatch"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/klog"
-	"github.com/mattbaird/jsonpatch"
 )
 
 var DB *gorm.DB
@@ -19,26 +22,26 @@ var DB *gorm.DB
 1. uuid 统一使用k8s的uuid, 并增加版本信息说明. uuid加版本为唯一键值
 2. 当根资源发生变化时，会生成新的traceID
 3. 子资源将继承父资源的traceID
- */
+*/
 type AuditInfo struct {
-	Uuid string `gorm:"type:varchar(36);primarykey"`
-	ResVersion string `gorm:"type:varchar(20);primarykey"`
-	Event string `gorm:"type:varchar(10)"`
-	TraceId string `gorm:"type:varchar(36)"`
-	IsRoot bool
-	ParentUuid string `gorm:"type:varchar(36)"`
-	Context string `gorm:"type:text(65535)"`
-	EventTime int64 `gorm:"index"`
+	Uuid        string `gorm:"type:varchar(36);primarykey"`
+	ResVersion  string `gorm:"type:varchar(20);primarykey"`
+	Event       string `gorm:"type:varchar(10)"`
+	TraceId     string `gorm:"type:varchar(36)"`
+	IsRoot      bool
+	ParentUuid  string `gorm:"type:varchar(36)"`
+	Context     string `gorm:"type:text(65535)"`
+	EventTime   int64  `gorm:"index"`
 	ContextDiff string `gorm:"type:text(65535)"`
-	OldVersion string `gorm:"type:varchar(20)"`
+	OldVersion  string `gorm:"type:varchar(20)"`
 }
 
-func (t *AuditInfo) ToString() string  {
+func (t *AuditInfo) ToString() string {
 	m, _ := json.Marshal(t)
 	return string(m)
 }
 
-func NewAuditInfo(obj, oldObj *unstructured.Unstructured, event string)  *AuditInfo {
+func NewAuditInfo(obj, oldObj *unstructured.Unstructured, event string) *AuditInfo {
 	res := AuditInfo{}
 
 	res.Uuid = string(obj.GetUID())
@@ -69,18 +72,18 @@ func NewAuditInfo(obj, oldObj *unstructured.Unstructured, event string)  *AuditI
 }
 
 type MetaData struct {
-	Uuid string `gorm:"type:varchar(36);primarykey"`
-	SelfLink string `gorm:"type:varchar(200)"`
-	ApiVersion string `gorm:"type:varchar(100)"`
-	Kind string `gorm:"type:varchar(30)"`
-	Name string `gorm:"type:varchar(100)"`
-	Namespace string `gorm:"type:varchar(30)"`
+	Uuid        string `gorm:"type:varchar(36);primarykey"`
+	SelfLink    string `gorm:"type:varchar(200)"`
+	ApiVersion  string `gorm:"type:varchar(100)"`
+	Kind        string `gorm:"type:varchar(30)"`
+	Name        string `gorm:"type:varchar(100)"`
+	Namespace   string `gorm:"type:varchar(30)"`
 	Annotations string `gorm:"type:varchar(1024)"`
 	CreateTime  time.Time
-	Labels string `gorm:"type:varchar(1024)"`
+	Labels      string `gorm:"type:varchar(1024)"`
 }
 
-func NewMetaData(obj *unstructured.Unstructured)  *MetaData {
+func NewMetaData(obj *unstructured.Unstructured) *MetaData {
 	res := MetaData{}
 
 	res.Uuid = string(obj.GetUID())
@@ -99,11 +102,18 @@ var (
 	dbaddr = flag.String("dbaddr", "root:letsg0@tcp(10.10.40.2:30083)/audit?parseTime=true&timeout=10s&readTimeout=6s&charset=utf8&parseTime=true&loc=Local", "db addr. ")
 )
 
-func InitDb()  {
+func InitDb() {
 	var err error
+
+	logConf := logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
+		SlowThreshold: 0,
+		LogLevel:      logger.Warn,
+		Colorful:      false,
+	})
 
 	DB, err = gorm.Open(mysql.Open(*dbaddr), &gorm.Config{
 		SkipDefaultTransaction: true,
+		Logger:                 logConf,
 	})
 	if err != nil {
 		klog.Fatalf("init db failed %v. ", err)

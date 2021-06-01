@@ -2,13 +2,11 @@ package tracer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"log"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/mattbaird/jsonpatch"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/trace/jaeger"
@@ -16,28 +14,38 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/semconv"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
-	"k8s.io/api/admission/v1beta1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/klog"
 
+	"k8s.io/kubernetes/cmd/kubeaudit/db"
 )
 
+/*
+根据数据库中保存的审计信息，生成trace信息
+
+1. 根资源的版本变更，会触发生成traceID，uid为k8s的uid保持不变。三元组为：traceid, uid, <nil>
+2. 子资源
+     根据子资源的parent_uuid与event_time,找到与该时间最接近的，并且比它小的，
+     有trace_id或者parent_uuid的记录，如果找到trace_id，则停止，否则继续找上层
+   如果缓存中traceid与找到的相同（表示是更新事件）：
+     生成的三元组为：traceid, uid, <spanID>
+   否则（表示新生成的traceID）：
+     生成的三元组为： traceid, parent_uid, uid
+     之后更新缓存
+
+*/
+
 type JaegerAudit struct {
-	workChain chan Msg
-	sync.Mutex
 	mid *MyIdGenerator
 
-	Flush func()
-	l     *zap.Logger
+	groupName string
+
+	traceInfo map[string]string // key is uid, valud is traceid
+	traceLock sync.RWMutex
+
+	tp trace.TracerProvider
 }
 
-type Msg struct {
-	Request *v1beta1.AdmissionRequest
-	Object *unstructured.Unstructured
-	FirstSelfId bool
-}
-
-func tracerProvider(url, serverName string) (*sdktrace.TracerProvider, error) {
+func tracerProvider(url, serverName string, g sdktrace.IDGenerator) (*sdktrace.TracerProvider, error) {
 	// Create the Jaeger exporter
 	exp, err := jaeger.NewRawExporter(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint(url)))
 	if err != nil {
@@ -51,27 +59,29 @@ func tracerProvider(url, serverName string) (*sdktrace.TracerProvider, error) {
 		sdktrace.WithResource(resource.NewWithAttributes(
 			semconv.ServiceNameKey.String(serverName),
 		)),
+		sdktrace.WithIDGenerator(g),
 	)
 	return tp, nil
 }
 
 // must defer Flush()
-func NewJaegerAudit(jaegerServer, serverName string, l *zap.Logger, workers int) (*JaegerAudit, error) {
+func RunJaegerAudit(jaegerServer, serverName, groupName string) {
 	res := JaegerAudit{}
-
-	if workers <= 0 {
-		workers = 10
-	}
-
-	res.workChain = make(chan Msg, workers*10)
-	res.l = l
 	res.mid = NewMyIDGenerator()
+	res.traceInfo = make(map[string]string, 0)
+	res.groupName = groupName
 
-	tp, err := tracerProvider(jaegerServer, serverName)
-	if err != nil {
-		return nil, fmt.Errorf("new jaeger exporter failed %v. ", err)
+	if groupName != "" {
+		serverName = groupName
 	}
-	otel.SetTracerProvider(tp)
+	tp, err := tracerProvider(jaegerServer, groupName, res.mid)
+	if err != nil {
+		klog.Fatalf("new jaeger exporter failed %v. ", err)
+	}
+	if groupName != "" {
+		otel.SetTracerProvider(tp)
+	}
+	res.tp = tp
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -81,182 +91,172 @@ func NewJaegerAudit(jaegerServer, serverName string, l *zap.Logger, workers int)
 		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 		if err := tp.Shutdown(ctx); err != nil {
-			log.Fatal(err)
+			klog.Fatal(err)
 		}
 	}(ctx)
 
-
-	for i := 0; i < workers; i++ {
-		go res.runWorker()
-	}
-
-	return &res, nil
+	res.Run()
 }
-
-func (t *JaegerAudit) Send(obj Msg) {
-	select {
-	case t.workChain <- obj:
-		return
-	case <-time.After(time.Second):
-		t.l.Error("send msg to workChain timeout. ")
-		return
-	}
-}
-
-/*
-jaeger-ui显示方式：
-左边查询：
-1. servie  对应 创建 NewJaegerAudit时的 serverName
-2. operation 对应 otel.Tracer(name) 名称
-
-右边查询结果：
-1. 相同parentId的记录，会合并显示。
-2. 如果selfId对应有相关的parentId的记录，可支持跳转显示
-
-审计特点：
-1. create事件时，无资源uid，会生成traceID
-2. 根据owner可生成parentID
-3. 根据uid可生成selfID
-
-所以：
-1. create事件时，生成一个span：  traceID, traceID[:8]
-2. 后续该资源的所有操作，parentID统一为： traceID[:8], selfID自动生成
-3. 如果资源有父资源，需要在创建时，创建的span为： traceID, 父资源id
-
- */
 
 const (
 	spanJob = "spanJobName"
 )
-func (t *JaegerAudit) runWorker() {
-	for {
-		msg := <-t.workChain
 
-		t.DoJaegerObject(msg)
+func (t *JaegerAudit) Run() {
+	startTime := time.Now().UnixNano()
+	//klog.Info("start jaeger from %d. ", startTime)
+
+	ldb := db.DB
+	for {
+		time.Sleep(20 * time.Second)
+		klog.Infof("%s scan start time %s. ", t.groupName, time.Unix(startTime/1e9, startTime%1e9).Format(time.RFC3339Nano))
+		row, err := ldb.Model(&db.AuditInfo{}).Where("event_time > ? ", startTime).Rows()
+		if err != nil {
+			klog.Errorf("get audit info failed %v. ", err)
+			continue
+		}
+		for row.Next() {
+			ai := &db.AuditInfo{}
+			err = ldb.ScanRows(row, &ai)
+			if err != nil {
+				klog.Errorf("scam row failed %v. ", err)
+				break
+			}
+			md := &db.MetaData{}
+			err = ldb.Find(md, "uuid = ? ", ai.Uuid).Error
+			if err != nil {
+				klog.Errorf("get metadata by uuid failed %v. ", err)
+				break
+			}
+			if t.groupName != "" && md.ApiVersion != t.groupName {
+				continue
+			}
+			t.DoAuditInfo(ai, md)
+			startTime = ai.EventTime // increase
+		}
+		row.Close()
+
 	}
 }
 
-func (t *JaegerAudit) DoJaegerObject(msg Msg)  {
-	obj := msg.Object
-
-	mapInfo := obj.GetAnnotations()
-	name := obj.GetName()
-	uid := string(obj.GetUID())
-
-	if mapInfo == nil {
-		return // skip
-	}
-
-	curl := t.l.With(zap.String("uuid", uid),
-		zap.String("traceId", mapInfo[AuditTraceName]))
-
-	var err error
-	var selfId, parentId trace.SpanID
-
-	selfId, err = K8sUidToSpanId(uid)
-	if err != nil && (msg.FirstSelfId || msg.Request.Operation != v1beta1.Create) { // 这两种情况会用到selfId
-		curl.Error("parse self id failed. ", zap.Error(err))
+/*
+workFlow:
+1 if is root:  traceID, uuid, <spanID>   ---> end
+2.2 get parentID and traceID -- Recursively get the closest event_time's record
+ 3. check uuid->traceID cache
+ 3.1(No) : traceID, parentID, selfID
+   4.1:  update cache: uuid->traceID  ---> end
+ 3.2(Yes): traceID, selfID, <spanID>
+*/
+func (t *JaegerAudit) DoAuditInfo(ai *db.AuditInfo, md *db.MetaData) {
+	if ai.IsRoot {
+		t.JaegerRecord(ai.TraceId, ai.Uuid, "", ai, md)
 		return
 	}
-
-	traceID, err := trace.TraceIDFromHex(mapInfo[AuditTraceName])
+	parentAI, err := GetParentAI(ai)
 	if err != nil {
-		curl.Error("parse trace id failed. ", zap.Error(err))
+		klog.Errorf("get parent info failed %v. ", err)
 		return
 	}
+	t.traceLock.RLock()
+	tid := t.traceInfo[ai.Uuid]
+	t.traceLock.RUnlock()
 
-	owner := obj.GetOwnerReferences()
-	parentUid := ""
-	subResource := false // 标识是否是子资源
-	if owner != nil && len(owner) > 0 {
-		subResource = true
-		parentUid = string(owner[0].UID)
+	if tid == parentAI.TraceId { // 3.2
+		t.JaegerRecord(parentAI.TraceId, ai.Uuid, "", ai, md)
+	} else { // 3.1
+		t.JaegerRecord(parentAI.TraceId, parentAI.Uuid, ai.Uuid, ai, md)
+		t.traceLock.Lock()
+		t.traceInfo[ai.Uuid] = parentAI.TraceId
+		t.traceLock.Unlock()
+	}
+}
+
+func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.AuditInfo, md *db.MetaData) {
+	if traceID == "" || parentID == "" {
+		klog.Errorf("get empty traceID %s or parentID %s, %s. ", traceID, parentID, ai.ToString())
+		return
+	}
+	var pid, sid trace.SpanID
+	noParent := true
+	tid, err := trace.TraceIDFromHex(strings.ReplaceAll(traceID, "-", ""))
+	if err != nil {
+		klog.Errorf("get invalid traceID %s %s. ", traceID, err)
+		return
+	}
+	pid, err = K8sUidToSpanId(parentID)
+	if err != nil {
+		klog.Errorf("get invalid parentID %s %s. ", parentID, err)
+		return
+	}
+	if spanID == "" {
+		sid = trace.SpanID{}
 	} else {
-		parentUid = mapInfo[AuditTraceName]
-	}
-	parentId, err = K8sUidToSpanId(parentUid)
-	if err != nil {
-		curl.Error("parse parent id failed. ", zap.Error(err))
-		return
+		noParent = false
+		sid, err = K8sUidToSpanId(spanID)
+		if err != nil {
+			klog.Errorf("get invalid spanID %s %s. ", spanID, err)
+			return
+		}
 	}
 
 	ctx := context.Background()
+	tr := t.tp.Tracer(md.SelfLink)
 
-	tr := otel.Tracer(name)
 	var span trace.Span
-
-	parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
-		TraceID:    traceID,
-		SpanID:     parentId,
-		TraceFlags: 0,
-		TraceState: trace.TraceState{},
-		Remote:     false,
-	})
-
-	if msg.Request.Operation == v1beta1.Create {
-		// 需要多生成一个基础span
-		t.Lock()
-		t.mid.TraceID = traceID
-		if !subResource {
-			t.mid.SpanID = parentId // traceId[:8]
-			_, span = tr.Start(ctx, name)
-		} else {
-			t.mid.SpanID = trace.SpanID{}
-			_, span = tr.Start(trace.ContextWithRemoteSpanContext(ctx, parentCtx), name)
-		}
-		t.Unlock()
+	if noParent {
+		t.mid.Lock()
+		t.mid.TraceID = tid
+		t.mid.SpanID = pid
+		_, span = tr.Start(ctx, md.Kind)
 		defer span.End()
-		span.SetAttributes(attribute.String(spanJob, name+"-rootCreate"))
-		curl.Info("gen root span: ",
-			zap.String("spanId", span.SpanContext().SpanID().String()),
-			zap.Bool("subResource", subResource),
-			zap.String("parentId", parentCtx.SpanID().String()),
-			)
-	} else if msg.FirstSelfId {
-		// 生成parentID与selfID的关系
-		t.Lock()
-		t.mid.TraceID = traceID
-		t.mid.SpanID = selfId
-		_, span = tr.Start(trace.ContextWithRemoteSpanContext(ctx, parentCtx), name)
-		defer span.End()
-		t.Unlock()
-		span.SetAttributes(attribute.String(spanJob, name+"-self"))
-		curl.Info("gen self span: ",
-			zap.String("spanId", span.SpanContext().SpanID().String()),
-			zap.String("parentId", parentCtx.SpanID().String()))
+		t.mid.Unlock()
+
+		span.SetAttributes(attribute.String(spanJob, "new-version-created"))
 	} else {
-		parentCtx = parentCtx.WithSpanID(selfId)
-		t.Lock()
-		t.mid.TraceID = traceID
-		t.mid.SpanID = trace.SpanID{}
-		ctx, span = tr.Start(trace.ContextWithRemoteSpanContext(ctx, parentCtx), name)
-		t.Unlock()
-		span.SetAttributes(attribute.String(spanJob,
-			fmt.Sprintf("%s-%s-%s-%s", name, msg.Request.Operation, msg.Request.SubResource, time.Now().Format(time.RFC3339))))
-		curl.Info("gen operator span: ",
-			zap.String("spanId", span.SpanContext().SpanID().String()),
-			zap.String("parentId", parentCtx.SpanID().String()))
+		parentCtx := trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID:    tid,
+			SpanID:     pid,
+			TraceFlags: 0,
+			TraceState: trace.TraceState{},
+			Remote:     false,
+		})
+		t.mid.Lock()
+		t.mid.TraceID = tid
+		t.mid.SpanID = sid
+		_, span = tr.Start(trace.ContextWithRemoteSpanContext(ctx, parentCtx), md.Kind)
 		defer span.End()
+		t.mid.Unlock()
+		span.SetAttributes(attribute.String(spanJob, ""))
 	}
-
-
 	span.SetAttributes(
-		attribute.String("traceId", traceID.String()),
-		attribute.String("spanId", selfId.String()),
-		attribute.String("parentId", parentId.String()),
+		attribute.String("uid", ai.Uuid),
+		attribute.String("api_version", md.ApiVersion),
+		attribute.String("kind", md.Kind),
+		attribute.String("name", md.Name),
+		attribute.String("namespace", md.Namespace),
+		attribute.String("context", ai.Context),
+		attribute.String("event_time", time.Unix(ai.EventTime/1e9, ai.EventTime%1e9).Format(time.RFC3339Nano)),
+		attribute.String("context_diff", ai.ContextDiff),
+		attribute.String("parent_uuid", ai.ParentUuid),
+		attribute.String("res_version", ai.ResVersion),
+		attribute.String("old_version", ai.OldVersion),
 	)
+	span.SetAttributes()
+}
 
-	//req, _ := json.Marshal(msg.Request)
-	span.SetAttributes(
-		attribute.String("uid", uid),
-		attribute.String("parentUid", parentUid),
-		attribute.String("operator", string(msg.Request.Operation)),
-		//attribute.String("requstDump", string(req)),
-	)
-
-	if msg.Request.Operation == v1beta1.Update { // 只有update时，需要获取变更信息
-		m, _ := jsonpatch.CreatePatch(msg.Request.OldObject.Raw, msg.Request.Object.Raw)
-		ms, _ := json.Marshal(m)
-		span.SetAttributes(attribute.String("updateDiff", string(ms)))
+func GetParentAI(ai *db.AuditInfo) (*db.AuditInfo, error) {
+	if ai.IsRoot {
+		return ai, nil
 	}
+	pai := &db.AuditInfo{}
+	err := db.DB.Limit(1).Model(&pai).Where("uuid = ? and event_time <= ? ",
+		ai.ParentUuid, ai.EventTime).Order("event_time DESC").Scan(&pai).Error
+	if err != nil {
+		return nil, fmt.Errorf("get parent uuid by %s failed %v. ", ai.ParentUuid, err)
+	}
+	if pai.IsRoot {
+		return pai, nil
+	}
+	return GetParentAI(pai)
 }

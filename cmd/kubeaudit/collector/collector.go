@@ -15,6 +15,10 @@ import (
 	"k8s.io/kubernetes/cmd/kubeaudit/db"
 )
 
+/*
+参考kubectl的代码，监听所有资源的变更。如果有资源不支持(报错the server could not find the requested resource)，则忽略。
+*/
+
 type K8sCollector struct {
 	f cmdutil.Factory
 
@@ -22,27 +26,27 @@ type K8sCollector struct {
 	resourceInfo map[string]bool
 }
 
-func NewK8sCollector(f cmdutil.Factory) *K8sCollector  {
+func NewK8sCollector(f cmdutil.Factory) *K8sCollector {
 	res := &K8sCollector{}
 	res.f = f
 	res.resourceInfo = make(map[string]bool)
-	
+
 	return res
 }
 
-func (t *K8sCollector) Run()  {
+func (t *K8sCollector) Run() {
 	for {
 		t.WatchResourceInfo()
-		time.Sleep(time.Minute*5)
+		time.Sleep(time.Minute * 5)
 	}
 }
 
-func (t *K8sCollector) WatchResourceInfo()  {
+func (t *K8sCollector) WatchResourceInfo() {
 	disClient, err := t.f.ToDiscoveryClient()
 	if err != nil {
 		klog.Fatalf("get dis client failed %v. ", err)
 	}
-	resourceList, err  := disClient.ServerPreferredResources()
+	resourceList, err := disClient.ServerPreferredResources()
 	if err != nil {
 		klog.Fatalf("get resource list failed %v. ", err)
 	}
@@ -50,13 +54,6 @@ func (t *K8sCollector) WatchResourceInfo()  {
 		//klog.Infof("kind: %s, apiversion: %s, groupVersion: %s ",
 		//	res.Kind, res.APIVersion, res.GroupVersion)
 		for _, api := range res.APIResources {
-			if api.Kind == "ComponentStatus" {
-				continue
-			}
-			if strings.Contains("authorization.k8s.io/v1,authentication.k8s.io/v1", res.GroupVersion) {
-				continue
-			}
-
 			klog.V(2).Infoln(api.String())
 			klog.V(2).Infof("name: %s, kind: %s, gv: %s. ", api.Name, api.Kind, res.GroupVersion)
 			if t.resourceInfo[api.Name] {
@@ -69,7 +66,7 @@ func (t *K8sCollector) WatchResourceInfo()  {
 
 }
 
-func WatchResources(f cmdutil.Factory, resName string)  {
+func WatchResources(f cmdutil.Factory, resName string) {
 	var buf [64]byte
 	runtime.Stack(buf[:], false)
 	klog.Infoln("watch res: ", resName, string(buf[:]))
@@ -88,7 +85,8 @@ func WatchResources(f cmdutil.Factory, resName string)  {
 
 	w, err := r.Watch("0")
 	if err != nil {
-		if strings.Contains(err.Error(), "the server could not find the requested resource ") {
+		if strings.Contains(err.Error(), "the server could not find the requested resource ") ||
+			strings.Contains(err.Error(), "the server does not allow this method on the requested resource") {
 			klog.Warningf("res %s not supported watch ,skip. ", resName)
 			return
 		}
@@ -99,14 +97,14 @@ func WatchResources(f cmdutil.Factory, resName string)  {
 
 	for {
 		select {
-		case ev := <- w.ResultChan():
+		case ev := <-w.ResultChan():
 			if ev.Object == nil {
 				continue
 			}
 			obj := ev.Object.(*unstructured.Unstructured)
 			uid := obj.GetUID()
 			klog.V(1).Infof("get event: %#v ", obj.GetName())
-			err = KeepObject(obj, resourceHistory[uid], string(ev.Type), )
+			err = KeepObject(obj, resourceHistory[uid], string(ev.Type))
 			if err != nil {
 				var buf [64]byte
 				runtime.Stack(buf[:], false)

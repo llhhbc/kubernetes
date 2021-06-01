@@ -12,15 +12,13 @@ import (
 
 type MyIdGenerator struct {
 	TraceID trace.TraceID
-	SpanID trace.SpanID
+	SpanID  trace.SpanID
 
 	sync.Mutex
 	randSource *rand.Rand
 }
 
 func (gen *MyIdGenerator) NewIDs(ctx context.Context) (tid trace.TraceID, sid trace.SpanID) {
-	gen.Lock()
-	defer gen.Unlock()
 	gen.randSource.Read(sid[:])
 
 	if gen.TraceID == (trace.TraceID{}) {
@@ -37,8 +35,6 @@ func (gen *MyIdGenerator) NewIDs(ctx context.Context) (tid trace.TraceID, sid tr
 }
 
 func (gen *MyIdGenerator) NewSpanID(ctx context.Context, traceID trace.TraceID) (sid trace.SpanID) {
-	gen.Lock()
-	defer gen.Unlock()
 	gen.randSource.Read(sid[:])
 
 	if gen.SpanID == (trace.SpanID{}) {
