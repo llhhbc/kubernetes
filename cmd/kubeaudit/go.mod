@@ -9,11 +9,11 @@ require (
 	go.opentelemetry.io/otel/exporters/trace/jaeger v0.20.0
 	go.opentelemetry.io/otel/sdk v0.20.0
 	go.opentelemetry.io/otel/trace v0.20.0
-	go.uber.org/zap v1.17.0
+	go.uber.org/zap v1.17.0 // indirect
 	gorm.io/driver/mysql v1.1.0
 	gorm.io/driver/sqlite v1.1.4 // indirect
 	gorm.io/gorm v1.21.10
-	k8s.io/api v0.21.1
+	k8s.io/api v0.21.1 // indirect
 	k8s.io/apimachinery v0.21.1
 	k8s.io/cli-runtime v0.21.1
 	k8s.io/klog v1.0.0

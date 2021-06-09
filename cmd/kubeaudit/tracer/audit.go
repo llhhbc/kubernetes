@@ -178,7 +178,7 @@ func (t *JaegerAudit) DoAuditInfo(ai *db.AuditInfo, md *db.MetaData) {
 	if tid == parentAI.TraceId { // 3.2
 		t.JaegerRecord(parentAI.TraceId, ai.Uuid, "", ai, md)
 	} else { // 3.1
-		t.JaegerRecord(parentAI.TraceId, parentAI.Uuid, ai.Uuid, ai, md)
+		t.JaegerRecord(parentAI.TraceId, ai.ParentUuid, ai.Uuid, ai, md)
 		t.traceLock.Lock()
 		t.traceInfo[ai.Uuid] = parentAI.TraceId
 		t.traceLock.Unlock()
