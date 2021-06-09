@@ -38,6 +38,8 @@ type AuditInfo struct {
 	EventTime   int64  `gorm:"index"`
 	ContextDiff string `gorm:"type:text(65535)"`
 	OldVersion  string `gorm:"type:varchar(20)"`
+	// record if save to jaeger
+	SpanID      string `gorm:"type:varchar(36)"`
 }
 
 func (t *AuditInfo) ToString() string {

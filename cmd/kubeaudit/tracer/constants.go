@@ -25,7 +25,7 @@ func K8sUidToSpanId(str string) (trace.SpanID, error) {
 		return trace.SpanID{}, fmt.Errorf("get empty uid. ")
 	}
 	str = strings.ReplaceAll(str, "-", "")
-	return trace.SpanIDFromHex(str[:16]) // 只取前16位
+	return trace.SpanIDFromHex(str[16:]) // 16 right
 }
 
 func GetSpanIdBYTraceId(tid trace.TraceID) trace.SpanID {

@@ -138,6 +138,11 @@ func (t *JaegerAudit) Run() {
 			if t.groupName != "" && md.ApiVersion != t.groupName {
 				continue
 			}
+			if ai.SpanID != "" {
+				klog.Errorf("[%s,%s,%s] ai's spanid is not empty, this can't be happened. ",
+					ai.Uuid, ai.ResVersion, ai.SpanID)
+				continue
+			}
 			t.DoAuditInfo(ai, md)
 			startTime = ai.EventTime // increase
 		}
@@ -175,7 +180,7 @@ func (t *JaegerAudit) DoAuditInfo(ai *db.AuditInfo, md *db.MetaData) {
 	tid := t.traceInfo[ai.Uuid]
 	t.traceLock.RUnlock()
 
-	if tid == parentAI.TraceId { // 3.2
+	if tid != "" && tid == parentAI.TraceId { // 3.2
 		t.JaegerRecord(parentAI.TraceId, ai.Uuid, "", ai, md)
 	} else { // 3.1
 		t.JaegerRecord(parentAI.TraceId, ai.ParentUuid, ai.Uuid, ai, md)
@@ -191,7 +196,7 @@ func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.Audi
 		return
 	}
 	var pid, sid trace.SpanID
-	noParent := true
+	hasParent := true
 	tid, err := trace.TraceIDFromHex(strings.ReplaceAll(traceID, "-", ""))
 	if err != nil {
 		klog.Errorf("get invalid traceID %s %s. ", traceID, err)
@@ -205,7 +210,7 @@ func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.Audi
 	if spanID == "" {
 		sid = trace.SpanID{}
 	} else {
-		noParent = false
+		hasParent = false
 		sid, err = K8sUidToSpanId(spanID)
 		if err != nil {
 			klog.Errorf("get invalid spanID %s %s. ", spanID, err)
@@ -219,7 +224,7 @@ func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.Audi
 	spanName := fmt.Sprintf("%s/%s/%s", md.Kind, md.Namespace, md.Name)
 
 	var span trace.Span
-	if noParent {
+	if !hasParent {
 		t.mid.Lock()
 		t.mid.TraceID = tid
 		t.mid.SpanID = pid
@@ -245,19 +250,32 @@ func (t *JaegerAudit) JaegerRecord(traceID, parentID, spanID string, ai *db.Audi
 		span.SetAttributes(attribute.String(spanJob, ""))
 	}
 	span.SetAttributes(
+		attribute.String("spanInfo", fmt.Sprintf("tid: %s, pid: %s, sid: %s. ",
+			span.SpanContext().TraceID().String(),
+			parentID,
+			span.SpanContext().SpanID().String())),
+		)
+	span.SetAttributes(
 		attribute.String("uid", ai.Uuid),
 		attribute.String("api_version", md.ApiVersion),
 		attribute.String("kind", md.Kind),
 		attribute.String("name", md.Name),
 		attribute.String("namespace", md.Namespace),
-		attribute.String("context", ai.Context),
+		//attribute.String("context", ai.Context),
 		attribute.String("event_time", time.Unix(ai.EventTime/1e9, ai.EventTime%1e9).Format(time.RFC3339Nano)),
 		attribute.String("context_diff", ai.ContextDiff),
 		attribute.String("parent_uuid", ai.ParentUuid),
 		attribute.String("res_version", ai.ResVersion),
 		attribute.String("old_version", ai.OldVersion),
 	)
-	span.SetAttributes()
+	err = db.DB.Model(&db.AuditInfo{}).Where("uuid = ? and res_version = ? ",
+		ai.Uuid, ai.ResVersion).Updates(&db.AuditInfo{
+		SpanID: span.SpanContext().SpanID().String(),
+	}).Error
+	if err != nil {
+		klog.Errorf("record span info [%s,%s,%s] failed %v. ",
+			ai.Uuid, ai.ResVersion, span.SpanContext().SpanID().String(),err)
+	}
 }
 
 func GetParentAI(ai *db.AuditInfo) (*db.AuditInfo, error) {

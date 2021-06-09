@@ -17,9 +17,11 @@ import (
 var (
 	jaegerServer = flag.String("jaegerServer", "http://myjaeger-collector.observability:14268/api/traces", "jaeger server addr. ")
 	apiserver    = flag.String("apiserver", "", "apiserver addr")
+	addr         = flag.String("addr", ":7080", "listen addr")
 )
 
 func main() {
+	klog.InitFlags(flag.CommandLine)
 	flag.Parse()
 
 	db.InitDb()
@@ -36,7 +38,7 @@ func main() {
 
 	go RunJaegerByGroup()
 
-	go http.ListenAndServe(":9091", nil)
+	go http.ListenAndServe(*addr, nil)
 
 	select {}
 }

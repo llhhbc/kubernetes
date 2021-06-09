@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 )
@@ -49,6 +50,7 @@ func NewMyIDGenerator() *MyIdGenerator {
 	gen := MyIdGenerator{}
 
 	var rngSeed int64
+	rngSeed = time.Now().UnixNano()
 	_ = binary.Read(crand.Reader, binary.LittleEndian, &rngSeed)
 	gen.randSource = rand.New(rand.NewSource(rngSeed))
 
