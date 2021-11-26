@@ -71,14 +71,11 @@ func RunJaegerAudit(jaegerServer, serverName, groupName string) {
 	res.traceInfo = make(map[string]string, 0)
 	res.groupName = groupName
 
-	if groupName != "" {
-		serverName = groupName
-	}
 	tp, err := tracerProvider(jaegerServer, groupName, res.mid)
 	if err != nil {
 		klog.Fatalf("new jaeger exporter failed %v. ", err)
 	}
-	if groupName != "" {
+	if groupName == "" { // use same tp
 		otel.SetTracerProvider(tp)
 	}
 	res.tp = tp

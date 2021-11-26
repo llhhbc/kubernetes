@@ -2,10 +2,12 @@ package collector
 
 import (
 	"fmt"
+	"path"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
@@ -18,6 +20,8 @@ import (
 /*
 参考kubectl的代码，监听所有资源的变更。如果有资源不支持(报错the server could not find the requested resource)，则忽略。
 */
+
+var groupSkipList = pflag.StringArray("groupSkipList", []string{}, "group skip list [apiName/GroupVersion]. such as:  ")
 
 type K8sCollector struct {
 	f cmdutil.Factory
@@ -59,6 +63,12 @@ func (t *K8sCollector) WatchResourceInfo() {
 			if t.resourceInfo[api.Name] {
 				continue
 			}
+			key := path.Join(api.Name, res.GroupVersion)
+			if InSkipGroup(key) {
+				klog.Infof("skip group: %s. ", key)
+				continue
+			}
+			klog.Infof("start watch %s. ", key)
 			t.resourceInfo[api.Name] = true
 			go WatchResources(t.f, api.Name)
 		}
@@ -152,3 +162,13 @@ func KeepObject(curObj, oldObj *unstructured.Unstructured, event string) error {
 
 	return nil
 }
+
+func InSkipGroup(groupName string) bool  {
+	for _, g := range *groupSkipList {
+		if groupName == g {
+			return true
+		}
+	}
+	return false
+}
+

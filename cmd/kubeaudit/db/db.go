@@ -2,13 +2,13 @@ package db
 
 import (
 	"encoding/json"
-	"flag"
 	"log"
 	"os"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/mattbaird/jsonpatch"
+	"github.com/spf13/pflag"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -19,7 +19,7 @@ import (
 var DB *gorm.DB
 
 var (
-	noNewTraceID = flag.Bool("noNewTraceID", false, "root resource if generate traceID")
+	noNewTraceID = pflag.Bool("noNewTraceID", false, "root resource if generate traceID")
 )
 
 /*
@@ -109,7 +109,7 @@ func NewMetaData(obj *unstructured.Unstructured) *MetaData {
 }
 
 var (
-	dbaddr = flag.String("dbaddr", "root:letsg0@tcp(10.10.40.2:30083)/audit?parseTime=true&timeout=10s&readTimeout=6s&charset=utf8&parseTime=true&loc=Local", "db addr. ")
+	dbaddr = pflag.String("dbaddr", "root:root@tcp(127.0.0.1:3306)/audit?parseTime=true&timeout=10s&readTimeout=6s&charset=utf8&parseTime=true&loc=Local", "db addr. ")
 )
 
 func InitDb() {

@@ -4,7 +4,10 @@ import (
 	"flag"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"time"
 
+	"github.com/spf13/pflag"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/klog"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
@@ -15,14 +18,16 @@ import (
 )
 
 var (
-	jaegerServer = flag.String("jaegerServer", "http://myjaeger-collector.observability:14268/api/traces", "jaeger server addr. ")
-	apiserver    = flag.String("apiserver", "", "apiserver addr")
-	addr         = flag.String("addr", ":7080", "listen addr")
+	jaegerServer = pflag.String("jaegerServer", os.Getenv("JAEGER_SERVER"), "jaeger server addr. ")
+	apiserver    = pflag.String("apiserver", "", "apiserver addr")
+	addr         = pflag.String("addr", ":7080", "listen addr")
 )
 
 func main() {
-	klog.InitFlags(flag.CommandLine)
-	flag.Parse()
+	log := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
+	klog.InitFlags(log)
+	pflag.CommandLine.AddGoFlagSet(log)
+	pflag.Parse()
 
 	db.InitDb()
 
@@ -38,7 +43,7 @@ func main() {
 
 	go RunJaegerByGroup()
 
-	go http.ListenAndServe(*addr, nil)
+	go http.ListenAndServe(*addr, nil) // for pprof
 
 	select {}
 }
@@ -59,5 +64,6 @@ func RunJaegerByGroup() {
 			go tracer.RunJaegerAudit(*jaegerServer, "", av)
 			groupFlag[av] = true
 		}
+		time.Sleep(time.Minute)
 	}
 }
